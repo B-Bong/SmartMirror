@@ -1,377 +1,219 @@
-# Smart Mirror rPPG Implementation Guide
+# Smart Mirror — Quick Setup Guide
 
-Complete setup guide for the Smart Mirror backend + frontend integration.
+Concise reference for getting the Smart Mirror running. See `README.md` for full documentation.
+
+---
 
 ## Architecture Overview
 
 ```
 Frontend (Next.js)
-    ↓ Records 50-60 sec video
+    ↓ 50-second auto-recorded WebM
 Backend API (FastAPI)
-    ↓ Sends to VitalLens
-VitalLens Service
-    ↓ Analyzes rPPG
-Backend API
-    ↓ Returns vital signs
-Frontend (Next.js)
-    ↓ Displays metrics
+    ↓ FFmpeg compresses to 480p MP4
+VitalLens (cloud API or local CHROM)
+    ↓ Vital signs JSON
+Frontend
+    ↓ Slide-up Health Report + Ambient Bar (KL weather / clock)
 ```
 
-## Quick Start (5 minutes)
+---
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.10+
-- Node.js 18+
-- FFmpeg installed globally
-- VitalLens API key (free at https://www.rouast.com/api)
+- Python **3.12** (not 3.13+)
+- Node.js **18+**
+- FFmpeg **8.1** (`ffmpeg.exe` accessible)
+- VitalLens API key from https://www.rouast.com/api *(not needed in local mode)*
 
-### Step 1: Backend Setup
+---
 
-```bash
+### Step 1 — Backend Setup
+
+```powershell
 cd backend
 
-# Create virtual environment
+# Create & activate virtual environment
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Copy and configure .env
-copy .env.example .env
-# Edit .env: add your VITALLENS_API_KEY
+# Create .env (see template below)
+```
 
-# Start server
+**`backend/.env` template:**
+
+```env
+# ── VitalLens ──────────────────────────────────────────────────
+VITALLENS_API_KEY=your_api_key_here
+
+# true  = offline CHROM algorithm (no quota, no network needed)
+# false = cloud API at api.rouast.com (requires valid key above)
+VITALLENS_LOCAL=false
+
+# ── FFmpeg ─────────────────────────────────────────────────────
+FFMPEG_BIN=C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin
+
+# ── Server ─────────────────────────────────────────────────────
+PORT=8000
+ENVIRONMENT=development
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+```
+
+> **Having SSL / quota errors?** Set `VITALLENS_LOCAL=true` — fully offline, no upload needed.
+
+```powershell
+# Start backend
 python main.py
 ```
 
-**Expected output:**
+Expected:
 ```
-INFO:     Uvicorn running on http://0.0.0.0:8000
-INFO:     Smart Mirror rPPG API starting...
+INFO: Uvicorn running on http://0.0.0.0:8000
+INFO: Application startup complete.
 ```
 
-Test it: `curl http://localhost:8000/health`
+Test: `curl http://localhost:8000/health`
 
-### Step 2: Frontend Setup
+---
 
-In another terminal:
+### Step 2 — Frontend Setup
 
-```bash
-# Install dependencies (first time only)
+```powershell
+# From project root
 npm install
-
-# Start dev server
 npm run dev
 ```
 
-**Expected output:**
+Expected:
 ```
-  ▲ Next.js 16.2.0
-  - Local:        http://localhost:3000
+▲ Next.js 16.2.0
+  Local: http://localhost:3000
+✓ Ready
 ```
 
-### Step 3: Try It Out
+---
 
-1. Open http://localhost:3000 in browser
-2. Click "Start Camera" (allow permissions)
-3. Click "Record" 
-4. Wait 50 seconds (auto-stops)
-5. Wait 1-2 minutes for analysis
-6. See vital signs update!
+### Step 3 — Use It
+
+1. Open **http://localhost:3000**
+2. Click **"Start Camera"** → allow camera permission
+3. Click **"Record"** → 50-second countdown begins
+4. Stay still, face centered in oval — recording auto-stops at 0
+5. Wait 30–90 s for analysis
+6. **Health Report** slides up with all metrics
+7. Dismiss with **✕** or tap backdrop; repeat as needed
+
+The **ambient bar** (top of mirror) shows:
+- **Left** — Current KL weather from `api.data.gov.my` (no key needed)
+- **Right** — Live clock + date (Malaysia time, UTC+8)
 
 ---
 
 ## File Structure
 
 ```
-smart-mirror/
+SmartMirror/
 ├── backend/
-│   ├── main.py                 # FastAPI server
-│   ├── requirements.txt        # Python dependencies
-│   ├── .env.example           # Environment template
-│   ├── Dockerfile             # Docker config
-│   └── README.md              # Backend docs
+│   ├── main.py                  # FastAPI server
+│   ├── requirements.txt
+│   ├── .env                     # Your config (not committed)
+│   └── venv/
+│
 ├── components/
-│   ├── smart-mirror.tsx       # Main UI (UPDATED)
+│   ├── smart-mirror.tsx         # Main orchestrator
+│   ├── ambient-bar.tsx          # KL weather + clock (NEW)
+│   ├── health-report.tsx        # Post-scan report panel (NEW)
+│   ├── alignment-guide.tsx      # Scan oval (recording only)
+│   ├── led-strip.tsx
 │   ├── health-widget.tsx
-│   ├── wellness-widget.tsx
-│   └── ...
+│   └── wellness-widget.tsx
+│
 ├── hooks/
-│   ├── use-video-recorder.ts  # Video recording hook (NEW)
-│   └── use-toast.ts
+│   ├── use-video-recorder.ts    # 50s auto-stop recorder
+│   ├── use-weather.ts           # KL forecast (NEW)
+│   └── use-clock.ts             # Live 1s clock (NEW)
+│
 ├── lib/
-│   ├── types.ts               # TypeScript types (NEW)
-│   ├── health-analysis-api.ts # API client (NEW)
+│   ├── health-analysis-api.ts
+│   ├── types.ts
 │   └── utils.ts
-├── .env.local                 # Frontend env (NEW)
-└── ...
+│
+├── README.md                    # Full documentation
+└── SETUP_GUIDE.md               # This file
 ```
 
 ---
 
-## What's New
+## Configuration Reference
 
-### Backend Files (NEW)
-
-1. **`backend/main.py`** - FastAPI server with two endpoints:
-   - `POST /api/health/process-video` - Upload video file
-   - `POST /api/health/process-video-base64` - Send base64 video
-
-2. **`backend/requirements.txt`** - Dependencies
-
-3. **`backend/Dockerfile`** - For production deployment
-
-### Frontend Files (NEW)
-
-1. **`lib/types.ts`** - TypeScript interfaces for VitalLens response
-   - `HealthAnalysisResponse` - API response
-   - `HealthMetrics` - Frontend state
-
-2. **`lib/health-analysis-api.ts`** - API client class
-   - `uploadVideo()` - Send video to backend
-   - `parseResponse()` - Transform API response
-   - `calculateWellnessScore()` - Compute wellness
-   - `estimateStressLevel()` - Estimate stress
-
-3. **`hooks/use-video-recorder.ts`** - React hook for recording
-   - `startRecording()` - Start recording from stream
-   - `stopRecording()` - Stop and get blob
-   - Auto-stops at 50 seconds
-
-4. **`components/smart-mirror.tsx`** (UPDATED)
-   - Integrated video recording
-   - Integrated API calls
-   - Real metric display
-   - Loading/error states
-
-5. **`.env.local`** - Frontend environment
-   - `NEXT_PUBLIC_API_URL` - Backend location
+| `.env` variable | Default | Notes |
+|-----------------|---------|-------|
+| `VITALLENS_API_KEY` | *(required for cloud)* | From rouast.com/api |
+| `VITALLENS_LOCAL` | `false` | `true` = offline CHROM, no key/quota needed |
+| `FFMPEG_BIN` | *(required)* | Path to folder with `ffmpeg.exe` |
+| `PORT` | `8000` | Backend port |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated frontend origins |
 
 ---
 
-## Configuration
+## Common Issues
 
-### Backend (.env)
-
-```env
-# VitalLens service
-VITALLENS_API_KEY=your_key_here
-
-# Server
-PORT=8000
-ENVIRONMENT=development
-
-# CORS (allow frontend)
-CORS_ORIGINS=http://localhost:3000
-```
-
-### Frontend (.env.local)
-
-```env
-# Backend API location
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
+| Issue | Fix |
+|-------|-----|
+| `FFmpeg not found` | Check `FFMPEG_BIN` path in `.env`; verify `ffmpeg.exe` exists at that path |
+| `API key not configured` | Add `VITALLENS_API_KEY` to `.env`, or set `VITALLENS_LOCAL=true` |
+| SSL / quota / connection errors | Set `VITALLENS_LOCAL=true` — eliminates all cloud API issues |
+| Camera denied | Browser Settings → Privacy → Camera → allow; refresh page |
+| No face detected | Better lighting, center face in oval, reduce movement |
+| Weather shows future date | Fixed — uses `toLocaleDateString` with `Asia/Kuala_Lumpur` timezone |
+| CORS error | Confirm `CORS_ORIGINS` in `.env` matches `http://localhost:3000`; restart backend |
 
 ---
 
 ## API Reference
 
-### Process Video
+### `POST /api/health/process-video`
 
-**Endpoint:** `POST /api/health/process-video`
-
-**Request:**
 ```
 Content-Type: multipart/form-data
-Body: { file: [video_blob] }
+Body: { file: <video_blob> }
 ```
 
-**Response:**
+Response:
 ```json
 {
+  "success": true,
   "vital_signs": {
-    "heart_rate": { "value": 72.5, "unit": "bpm", "confidence": 0.85 },
-    "respiratory_rate": { "value": 16.2, "unit": "rpm", "confidence": 0.79 },
-    "hrv_sdnn": { "value": null, "unit": "ms", "confidence": null },
-    ...
+    "heart_rate":       { "value": 75, "confidence": 0.92, "unit": "bpm" },
+    "respiratory_rate": { "value": 16, "confidence": 0.85, "unit": "rpm" },
+    "hrv_sdnn":         { "value": 35, "unit": "ms" },
+    "hrv_rmssd":        { "value": 28, "unit": "ms" }
   },
-  "face": { "confidence": 0.92, "note": "..." },
-  "message": "..."
+  "face": { "confidence": 0.95, "detected": true },
+  "message": "Analysis complete"
 }
 ```
 
----
-
-## Performance Notes
-
-### Video Requirements
-
-- **Duration**: 50-60 seconds (optimal)
-- **Format**: WebM or MP4
-- **Resolution**: 640x480+
-- **FPS**: 25-30 fps
-- **Lighting**: Well-lit environment
-- **Face**: Clear, centered, looking at camera
-
-### Processing Times
-
-| Duration | Speed | Free Tier |
-|----------|-------|-----------|
-| 30-50 sec | Fast | 30-60 sec |
-| 50-60 sec | Normal | 1-2 min |
-| 60+ sec | Slow | 2+ min |
-
-### Confidence Scores
-
-- **>0.8**: Excellent reliability
-- **0.6-0.8**: Good reliability  
-- **0.4-0.6**: Fair, may need retry
-- **<0.4**: Poor, try different conditions
-
----
-
-## Troubleshooting
-
-### "VitalLens API key not configured"
-
-**Solution:**
-1. Get API key from https://www.rouast.com/api
-2. Add to `backend/.env`
-3. Restart backend: `python main.py`
-
-### "Could not analyze the video"
-
-**Causes:**
-- Face not clearly visible
-- Poor lighting
-- Video too short (<30s)
-- Video too dark/blurry
-
-**Solution:** Re-record in well-lit environment
-
-### "Could not upload video - Connection refused"
-
-**Causes:**
-- Backend not running
-- Wrong port/URL
-- CORS issues
-
-**Solution:**
-1. Check backend running: `http://localhost:8000/health`
-2. Check `.env.local`: `NEXT_PUBLIC_API_URL=http://localhost:8000`
-3. Restart both servers
-
-### FFmpeg not found
-
-**Solution:**
-1. Install FFmpeg: https://ffmpeg.org/download.html
-2. Add to PATH
-3. Verify: `ffmpeg -version`
-4. Restart terminal
-
----
-
-## Production Deployment
-
-### Docker Setup
-
-```bash
-cd backend
-
-# Build image
-docker build -t smart-mirror-api .
-
-# Run container
-docker run -p 8000:8000 \
-  -e VITALLENS_API_KEY=your_key \
-  -e CORS_ORIGINS=https://yourdomain.com \
-  smart-mirror-api
+### `GET /health`
+```json
+{ "status": "running", "version": "1.0.0" }
 ```
 
-### Environment Variables for Production
-
-```env
-# backend/.env
-VITALLENS_API_KEY=prod_key
-PORT=8000
-ENVIRONMENT=production
-CORS_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
-
-# frontend/.env.production
-NEXT_PUBLIC_API_URL=https://api.yourdomain.com
-```
-
-### Cloud Deployment
-
-- **Backend**: Render, Railway, Heroku, AWS Lambda
-- **Frontend**: Vercel, Netlify, GitHub Pages
-- **Database**: MongoDB Atlas (optional, for history)
-
 ---
 
-## Testing
-
-### Test Backend API
-
-```bash
-# Health check
-curl http://localhost:8000/health
-
-# API documentation
-open http://localhost:8000/docs
-```
-
-### Test Frontend
-
-1. Open http://localhost:3000
-2. Browser console (F12) shows logs
-3. Look for `[SmartMirror]` prefixed messages
-
-### Debug Video Upload
-
-Chrome DevTools:
-1. Open Network tab
-2. Click "Record"
-3. Look for `process-video` request
-4. Check response status and body
-
----
-
-## Next Steps
-
-### Features to Add
-
-1. **History Storage**
-   - Save results to database
-   - Show trends over time
-   - Export data
-
-2. **Real-time Streaming**
-   - WebSocket for live results
-   - Process chunks instead of whole video
-
-3. **Advanced Metrics**
-   - Store HRV history
-   - Trend analysis
-   - Alerts for abnormal values
-
-4. **User Accounts**
-   - Authentication
-   - Multiple users
-   - Personal dashboards
-
----
-
-## Support & Documentation
+## Support
 
 - **VitalLens Docs**: https://docs.rouast.com/python
+- **Malaysia Open Data API**: https://api.data.gov.my
 - **FastAPI Docs**: https://fastapi.tiangolo.com
 - **Next.js Docs**: https://nextjs.org/docs
+- **FFmpeg**: https://ffmpeg.org/documentation.html
 
 ---
 
-## License
-
-MIT
+**Last Updated:** March 29, 2026

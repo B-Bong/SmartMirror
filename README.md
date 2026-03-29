@@ -1,6 +1,6 @@
 # Smart Mirror rPPG (Remote Photoplethysmography) System
 
-A real-time vital signs analysis system using remote photoplethysmography (rPPG) technology. This project integrates a Next.js frontend with a FastAPI backend to capture video of your face and analyze heart rate, respiratory rate, and other vital signs using the VitalLens API.
+A real-time vital signs analysis system using remote photoplethysmography (rPPG) technology. This project integrates a Next.js frontend with a FastAPI backend to capture a 50-second video of your face and analyze heart rate, respiratory rate, and other vital signs using the VitalLens API — with a live weather and clock ambient display for Kuala Lumpur.
 
 ## 📋 Table of Contents
 
@@ -13,41 +13,48 @@ A real-time vital signs analysis system using remote photoplethysmography (rPPG)
 - [Usage Guide](#usage-guide)
 - [Working Logic](#working-logic)
 - [API Endpoints](#api-endpoints)
+- [Configuration Reference](#configuration-reference)
 - [Troubleshooting](#troubleshooting)
+- [Changelog](#changelog)
 
 ---
 
 ## Overview
 
-This Smart Mirror system captures a 50-60 second video of your face and uses **remote photoplethysmography (rPPG)** technology to extract vital signs without any wearable devices. The VitalLens API analyzes the subtle color variations in your face across video frames to compute:
+This Smart Mirror system automatically captures a **50-second video** of your face and uses **remote photoplethysmography (rPPG)** technology to extract vital signs without any wearable devices. The VitalLens SDK analyzes subtle color variations in your face across video frames to compute:
 
-- **Heart Rate (HR)** - beats per minute
-- **Respiratory Rate (RR)** - breaths per minute  
-- **Heart Rate Variability (HRV)** - SDNN, RMSSD, LF/HF ratio
-- **PPG Waveform** - the extracted heart signal
-- **Face Confidence** - reliability of the analysis
+- **Heart Rate (HR)** — beats per minute
+- **Respiratory Rate (RR)** — breaths per minute
+- **Heart Rate Variability (HRV)** — SDNN and RMSSD metrics
+- **Wellness Score** — composite health score (0–100)
+- **Stress Level** — Low / Moderate / High estimation
+- **Face Confidence** — reliability of the analysis
+
+Additionally, the mirror displays **live Kuala Lumpur weather** (from the official Malaysia open data API) alongside the current **date and time**.
 
 ### How rPPG Works
 
-1. Video is captured of your face for 50-60 seconds
-2. FFmpeg extracts frames and converts to MP4 format
-3. VitalLens API analyzes color changes in facial regions across frames
-4. These subtle color variations correspond to blood flow (PPG signal)
-5. The signal is processed to extract heart rate and respiratory rate
-6. Results are displayed in real-time on the mirror interface
+1. Video is captured of your face for **50 seconds** (auto-stops)
+2. FFmpeg converts the WebM blob to MP4, compressing to 480p for reliability
+3. VitalLens analyzes color changes in facial regions (cheeks) across frames
+4. These subtle color variations correspond to blood flow (the PPG signal)
+5. The signal is processed via FFT to extract heart rate and respiratory rate
+6. Results appear in a **slide-up Health Report** panel
 
 ---
 
 ## Features
 
-✅ **Real-time Vital Signs Analysis** - No sensors or wearables required  
-✅ **Face Detection & Tracking** - Automatic face detection in video  
-✅ **Multiple Vital Metrics** - Heart rate, respiratory rate, HRV  
-✅ **Detailed Confidence Scores** - Know how reliable each measurement is  
-✅ **WebM to MP4 Conversion** - Browser video auto-converted for better compatibility  
-✅ **Beautiful Mirror UI** - Displays vital signs with real-time metric updates  
-✅ **Error Handling** - Clear error messages if video can't be analyzed  
-✅ **Wellness Score** - Composite health metric derived from vitals  
+✅ **Auto Recording** — 50-second countdown timer; recording starts and stops automatically  
+✅ **Live Ambient Bar** — Real-time KL weather (data.gov.my) + clock/date always visible  
+✅ **Post-scan Health Report** — Metrics slide up after analysis (not cluttering the idle view)  
+✅ **Alignment Guide** — Face oval + scan animation appears only during active recording  
+✅ **LED Strip Animation** — Animated border reacts to scanning state  
+✅ **Multiple Vital Metrics** — Heart rate, respiratory rate, HRV (SDNN & RMSSD)  
+✅ **Confidence Bars** — Visual indicator of measurement reliability per metric  
+✅ **Local or Cloud Processing** — Toggle between VitalLens cloud API and local CHROM algorithm  
+✅ **Video Compression** — FFmpeg scales to 480p, CRF 32 before upload to reduce SSL errors  
+✅ **Error Handling** — Clear error messages and retry flow  
 
 ---
 
@@ -58,21 +65,26 @@ This Smart Mirror system captures a 50-60 second video of your face and uses **r
 │                     SMART MIRROR SYSTEM                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Frontend (Next.js + React)                  Backend (FastAPI) │
-│  ├─ Smart Mirror Component                   ├─ Main Server    │
-│  │  ├─ Video Recording (MediaRecorder)       ├─ FFmpeg Support │
-│  │  ├─ Real-time Metrics Display             ├─ WebM→MP4 Conv  │
-│  │  └─ Camera Permission Flow                ├─ VitalLens API  │
-│  │                                           └─ DB (Future)    │
-│  ├─ Health Widget Components                                   │
-│  ├─ Wellness Widget                          External APIs     │
-│  ├─ LED Strip Animation                      ├─ VitalLens API  │
-│  ├─ Alignment Guide                          └─ FFmpeg         │
-│  └─ API Client (health-analysis-api.ts)                        │
+│  Frontend (Next.js + React)              Backend (FastAPI)      │
+│  ├─ SmartMirror component                ├─ main.py server      │
+│  │  ├─ 50s auto-recording countdown      ├─ FFmpeg 480p/CRF-32  │
+│  │  ├─ AmbientBar (weather + clock)      ├─ WebM → MP4 convert  │
+│  │  ├─ AlignmentGuide (scan only)        ├─ VitalLens cloud API │
+│  │  ├─ HealthReport (post-scan panel)    └─ OR local CHROM mode │
+│  │  └─ Camera Permission Flow                                   │
+│  │                                       External Data Sources  │
+│  ├─ AmbientBar component                 ├─ api.data.gov.my     │
+│  │  ├─ useWeather hook (KL forecast)     │   (KL weather)       │
+│  │  └─ useClock hook (live time)         └─ api.rouast.com      │
+│  │                                           (VitalLens cloud)  │
+│  ├─ HealthReport component                                      │
+│  ├─ AlignmentGuide component                                    │
+│  ├─ LedStrip component                                          │
+│  └─ API Client (health-analysis-api.ts)                         │
 │                                                                 │
-│  Video Processing Pipeline:                                    │
-│  Browser (WebM 50s) → Backend → FFmpeg MP4 → VitalLens API    │
-│                      → Vital Signs JSON → Frontend Display     │
+│  Video Pipeline:                                                │
+│  Browser (WebM 50s) → Backend → FFmpeg 480p MP4                │
+│    → VitalLens (cloud or local) → JSON → HealthReport panel    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -81,44 +93,37 @@ This Smart Mirror system captures a 50-60 second video of your face and uses **r
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Frontend** | Next.js 16.2.0, React 19.0.0, TypeScript | UI, video recording, metric display |
-| **Backend** | FastAPI, Uvicorn, Python 3.12 | API server, video processing coordination |
-| **Video Processing** | FFmpeg 8.1 | Convert WebM→MP4, probe video metadata |
-| **Vital Signs Analysis** | VitalLens SDK 0.6.1 | rPPG-based vital sign extraction |
-| **Communication** | HTTP REST API, FormData | Frontend-backend video/results transfer |
-| **Styling** | Tailwind CSS, shadcn/ui | Component library and theme |
+| **Frontend** | Next.js 16.2, React 19, TypeScript | UI, video recording, metric display |
+| **Backend** | FastAPI, Uvicorn, Python 3.12 | API server, video processing |
+| **Video Processing** | FFmpeg 8.1 | Convert WebM→MP4, compress to 480p |
+| **Vital Signs (Cloud)** | VitalLens SDK 0.6.1 | rPPG via cloud API (api.rouast.com) |
+| **Vital Signs (Local)** | VitalLens SDK (CHROM method) | rPPG fully offline, no quota limits |
+| **Weather** | api.data.gov.my | Official Malaysia open data (no API key needed) |
+| **Styling** | Tailwind CSS, Custom CSS | Glassmorphism UI |
 
 ---
 
 ## Prerequisites
 
-Before starting, ensure you have:
-
 ### System Requirements
-- **Windows 10/11** (tested on Windows)
+- **Windows 10/11**
 - **Node.js 18+** (for frontend)
-- **Python 3.12** (exact version - 3.13+ has pydantic-core incompatibilities)
-- **FFmpeg 8.1** (for video processing)
+- **Python 3.12** (3.13+ has pydantic-core incompatibilities)
+- **FFmpeg 8.1** (must be accessible from PATH or configured via `FFMPEG_BIN`)
 - **Webcam** (for video recording)
-- **Modern browser** (Chrome, Edge, Firefox with WebRTC support)
+- **Modern browser** (Chrome or Edge recommended — best WebRTC support)
 
 ### Required API Keys
-- **VitalLens API Key** - Get from https://vitallens.ai (free tier available)
-  - Free tier: 5-10 requests/day, 60s duration
-  - Pro tier: Unlimited requests with higher accuracy features (HRV)
+- **VitalLens API Key** — Get from https://www.rouast.com/api  
+  - Free tier: ~5–10 requests/day  
+  - **Optional if using local mode** (`VITALLENS_LOCAL=true` in `.env`)
 
 ### Verify Prerequisites
 
 ```powershell
-# Check Node.js
-node --version
-npm --version
-
-# Check Python
-python --version
-
-# Check FFmpeg
-ffmpeg -version
+node --version     # 18+
+python --version   # 3.12.x
+ffmpeg -version    # 8.x
 ffprobe -version
 ```
 
@@ -126,73 +131,63 @@ ffprobe -version
 
 ## Setup & Installation
 
-### Step 1: Clone & Navigate to Project
+### Step 1: Navigate to Project
 
 ```powershell
 cd "C:\Users\User\Downloads\SmartMirror"
-ls  # Verify you see: app/, components/, backend/, package.json, etc.
 ```
 
 ### Step 2: Install FFmpeg (if not already done)
 
-1. Download FFmpeg 8.1 essentials build:
-   - Visit https://www.gyan.dev/ffmpeg/builds/
-   - Download **ffmpeg-8.1-essentials_build.zip**
-   - Extract to: `C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\`
-
-2. Verify FFmpeg is installed:
+1. Download **ffmpeg-8.1-essentials_build.zip** from https://www.gyan.dev/ffmpeg/builds/
+2. Extract to e.g. `C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\`
+3. Verify:
    ```powershell
    ffmpeg -version
-   ffprobe -version
    ```
 
 ### Step 3: Configure Backend
 
-1. **Set up Python Virtual Environment:**
-   ```powershell
-   cd backend
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
+```powershell
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-2. **Install Python Dependencies:**
-   ```powershell
-   pip install -r requirements.txt
-   ```
+Create **`backend/.env`**:
 
-3. **Create `.env` file** (backend/.env):
-   ```env
-   # VitalLens API Configuration
-   VITALLENS_API_KEY=your_api_key_here
+```env
+# ── VitalLens ──────────────────────────────────
+VITALLENS_API_KEY=your_api_key_here
 
-   # Server Configuration
-   PORT=8000
-   ENVIRONMENT=development
+# Set to true to use offline CHROM algorithm (no API key / quota needed)
+# Set to false to use cloud API (requires valid VITALLENS_API_KEY)
+VITALLENS_LOCAL=false
 
-   # CORS Configuration
-   CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+# ── FFmpeg ─────────────────────────────────────
+FFMPEG_BIN=C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin
 
-   # FFmpeg Configuration
-   FFMPEG_BIN=C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin
-   ```
+# ── Server ─────────────────────────────────────
+PORT=8000
+ENVIRONMENT=development
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+```
 
-   **Important:** Replace `your_api_key_here` with your actual VitalLens API key.
+> **Tip:** If you hit SSL/quota errors with the cloud API, set `VITALLENS_LOCAL=true` to process fully offline with no upload.
 
 ### Step 4: Install Frontend Dependencies
 
 ```powershell
-# From project root (not backend folder)
-cd ..
+cd ..   # back to project root
 npm install
-# or if using pnpm:
-pnpm install
 ```
 
 ---
 
 ## Running the Application
 
-### Terminal 1: Start Backend Server
+### Terminal 1 — Backend
 
 ```powershell
 cd backend
@@ -200,83 +195,69 @@ cd backend
 python main.py
 ```
 
-**Expected output:**
+Expected output:
 ```
-INFO:__main__:Added FFmpeg bin to PATH: C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:main:Smart Mirror rPPG API starting...
-INFO:main:CORS Origins: http://localhost:3000,http://localhost:3001
+INFO:__main__:Added FFmpeg bin to PATH: C:\...\bin
+INFO:__main__:VitalLens mode: CLOUD (api.rouast.com)
+INFO:     Uvicorn running on http://0.0.0.0:8000
 INFO:     Application startup complete.
 ```
 
-### Terminal 2: Start Frontend Development Server
+### Terminal 2 — Frontend
 
 ```powershell
-# From project root
 npm run dev
-# or:
-pnpm dev
 ```
 
-**Expected output:**
+Expected output:
 ```
 ▲ Next.js 16.2.0 (Turbopack)
-- Local:         http://localhost:3000
-- Network:       http://192.168.x.x:3000
-✓ Ready in 490ms
+  Local:   http://localhost:3000
+✓ Ready in ~500ms
 ```
 
-### Step 3: Open Browser
-
-Navigate to **http://localhost:3000** in your web browser.
+Open **http://localhost:3000** in your browser.
 
 ---
 
 ## Usage Guide
 
-### Step-by-Step Recording & Analysis
+### Step-by-Step Flow
 
-#### 1. **Grant Camera Permission**
-   - Page loads → "Start Camera" button appears
-   - Click "Start Camera"
-   - Browser asks for camera permission → Click "Allow"
-   - Live camera feed appears in mirror frame
+#### 1. Grant Camera Permission
+- Click **"Start Camera"**
+- Allow camera access when the browser asks
 
-#### 2. **Begin Recording**
-   - Frame yourself centered in mirror (alignment guide helps)
-   - Ensure good lighting on your face
-   - Click "Record" button (only visible after camera is active)
-   - **50-second countdown starts** - keep your face in frame, minimize movement
+#### 2. Begin Recording
+- Click **"Record"** (visible only after camera is active)
+- A **50-second countdown** begins with a visual circular arc
+- The alignment guide (face oval + corner brackets + scan line) appears
+- Keep your face centered and still
 
-#### 3. **Wait for Analysis**
-   - "Recording..." overlay shows elapsed time
-   - After 50 seconds, recording auto-stops
-   - "Analyzing vital signs..." overlay appears with spinner
-   - Takes 30-60 seconds to process
+#### 3. Automatic Stop & Analysis
+- At 0 seconds, recording auto-stops and **"Analyzing vital signs…"** overlay appears
+- The backend processes the video (30–90 seconds depending on mode)
 
-#### 4. **View Results**
-   - Top metric bar updates with:
-     - 💓 **Heart Rate** (BPM) - with pulsing animation
-     - 🌬️ **Respiratory Rate** (breaths/min)
-     - 🧠 **Stress Level** (Low/Moderate/High)
-     - ✨ **Wellness Score** (0-100)
-   - Results remain displayed after analysis completes
+#### 4. View the Health Report
+- A **slide-up panel** appears at the bottom with:
+  - 💓 **Heart Rate** (BPM) with confidence bar
+  - 🌬️ **Respiratory Rate** (br/min) with confidence bar
+  - 🧠 **Stress Level** (colour-coded: green / yellow / red)
+  - ✨ **Wellness Score** (0–100)
+  - HRV (SDNN & RMSSD) — if available
+- Tap **✕** or tap the backdrop to dismiss
 
-#### 5. **Error Handling**
-   - If error occurs, red error box appears below metric bar
-   - Common errors:
-     - "No face detected" → Reposition face in frame
-     - "Low confidence" → Ensure good lighting
-     - "FFmpeg error" → Check backend is running
-   - Click "Start Camera" again to retry
+#### 5. Ambient Bar (always visible)
+- **Top-left pill** — KL weather: temperature, condition (translated from Malay), "Kuala Lumpur" label
+  - Source: `api.data.gov.my`, refreshed every 30 min, **no API key needed**
+- **Top-right pill** — Live clock (HH:MM:SS AM/PM) + full date
 
 ### Tips for Best Results
 
-✅ **Lighting:** Use bright, even lighting (natural window light or LED lamp)  
-✅ **Position:** Center face in alignment guide, keep ~12 inches from camera  
-✅ **Stability:** Avoid excessive movement during recording  
-✅ **Duration:** Full 50-60 seconds for best accuracy  
-✅ **Comfort:** Relax - tension affects heart rate measurement  
+✅ **Lighting** — Bright, even frontal light (natural or LED lamp); avoid backlighting  
+✅ **Position** — Center face in the oval guide, ~30–40 cm from camera  
+✅ **Stability** — Avoid excessive movement during the full 50 seconds  
+✅ **Relax** — Tension elevates heart rate and reduces measurement accuracy  
 
 ---
 
@@ -285,194 +266,69 @@ Navigate to **http://localhost:3000** in your web browser.
 ### Complete Data Flow
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ 1. USER INTERACTION (Frontend)                                       │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Click "Start Camera"                                               │
-│  ↓                                                                   │
-│  navigator.mediaDevices.getUserMedia() → Ask browser for camera    │
-│  ↓                                                                   │
-│  User grants permission                                             │
-│  ↓                                                                   │
-│  <video> element streams live camera feed                           │
-│                                                                      │
-│  Click "Record"                                                     │
-│  ↓                                                                   │
-│  MediaRecorder starts capturing video frames                        │
-│  ↓                                                                   │
-│  Timer counts down: 50, 49, 48... 1, 0                             │
-│  ↓ (at 0 seconds)                                                   │
-│  MediaRecorder.stop() triggered                                     │
-│  ↓                                                                   │
-│  Video data collected into Blob (encoded as WebM)                  │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+1. USER INTERACTION (Frontend)
+───────────────────────────────
+Click "Start Camera"
+  → getUserMedia() → camera permission → live <video> feed
 
-┌──────────────────────────────────────────────────────────────────────┐
-│ 2. VIDEO UPLOAD (Frontend → Backend)                                 │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  HealthAnalysisAPI.uploadVideo(videoBlob)                           │
-│  ↓                                                                   │
-│  Create FormData with video file (video.webm)                       │
-│  ↓                                                                   │
-│  POST http://localhost:8000/api/health/process-video               │
-│  Headers: Content-Type: multipart/form-data                         │
-│  Body: { file: videoBlob }                                          │
-│  ↓                                                                   │
-│  (Network latency: ~100-500ms)                                      │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+Click "Record"
+  → MediaRecorder starts (WebM)
+  → 50-second countdown (circular arc overlay)
+  → At 0s: MediaRecorder.stop() → onRecordingComplete(blob)
 
-┌──────────────────────────────────────────────────────────────────────┐
-│ 3. VIDEO CONVERSION (Backend - FFmpeg)                               │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Backend receives WebM file → saves to temp location                │
-│  ↓                                                                   │
-│  check: file_ext == ".webm"?                                        │
-│  ↓ YES                                                              │
-│  convert_webm_to_mp4(webm_path)                                     │
-│  ↓                                                                   │
-│  subprocess.run([                                                    │
-│    "ffmpeg",                                                         │
-│    "-i", webm_path,              # input WebM                       │
-│    "-c:v", "libx264",            # H.264 video codec                │
-│    "-crf", "28",                 # compression quality              │
-│    "-c:a", "aac",               # AAC audio codec                   │
-│    "-y",                         # overwrite output                  │
-│    mp4_path                      # output MP4                       │
-│  ])                                                                  │
-│  ↓                                                                   │
-│  (Processing time: 5-15 seconds depending on duration)             │
-│  ↓                                                                   │
-│  Returns: mp4_path with proper frame rate metadata                  │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+2. VIDEO UPLOAD (Frontend → Backend)
+─────────────────────────────────────
+HealthAnalysisAPI.uploadVideo(videoBlob)
+  → POST http://localhost:8000/api/health/process-video
+  → multipart/form-data { file: video.webm }
 
-┌──────────────────────────────────────────────────────────────────────┐
-│ 4. VITALLENS ANALYSIS (Backend)                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  vl_client = VitalLens(method="vitallens", api_key=VITALLENS_KEY)   │
-│  ↓                                                                   │
-│  results = vl_client(mp4_path)                                      │
-│  ↓                                                                   │
-│  VitalLens processes video:                                         │
-│    1. Extract face region using face detection                     │
-│    2. Identify ROI (cheek regions with blood flow)                 │
-│    3. Extract color channels (R, G, B) across frames               │
-│    4. Reconstruct PPG waveform using rPPG algorithm                │
-│    5. Extract heart rate from FFT of PPG signal                    │
-│    6. Apply respiratory motion constraints                          │
-│    7. Extract respiratory rate                                      │
-│    8. Compute HRV metrics (SDNN, RMSSD, LF/HF)                     │
-│  ↓                                                                   │
-│  (Processing time: 20-60 seconds - backend to VitalLens API)      │
-│  ↓                                                                   │
-│  Returns: {                                                          │
-│    vitals: {                                                         │
-│      heart_rate: { value: 75, confidence: 0.92, unit: "bpm" },    │
-│      respiratory_rate: { value: 16, confidence: 0.85, unit: "rpm" }│
-│      hrv_sdnn: { value: 35 },                                      │
-│      ppg_waveform: [...],                                           │
-│      respiratory_waveform: [...]                                    │
-│    },                                                                │
-│    face: { confidence: 0.95 }                                       │
-│  }                                                                   │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+3. VIDEO COMPRESSION (Backend — FFmpeg)
+───────────────────────────────────────
+Receive WebM → save to temp file
+  → ffmpeg -i input.webm -vf "scale=-2:480" -crf 32 -c:v libx264 output.mp4
+  → Results in ~3–8 MB file (down from 30–60 MB raw WebM)
 
-┌──────────────────────────────────────────────────────────────────────┐
-│ 5. RESPONSE FORMATTING (Backend)                                     │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Backend transforms VitalLens response → standardized format        │
-│  ↓                                                                   │
-│  response_data = {                                                  │
-│    "success": true,                                                 │
-│    "vital_signs": {                                                 │
-│      "heart_rate": {                                                │
-│        "value": 75,                  # derived from PPG peak freq   │
-│        "confidence": 0.92,           # signal quality               │
-│        "unit": "bpm"                                                │
-│      },                                                              │
-│      "respiratory_rate": {                                          │
-│        "value": 16,                  # derived from breathing motion│
-│        "confidence": 0.85,                                          │
-│        "unit": "rpm"                                                │
-│      },                                                              │
-│      ... (HRV, waveforms, face confidence)                         │
-│    }                                                                 │
-│  }                                                                   │
-│  ↓                                                                   │
-│  HTTP 200 OK + JSON response                                        │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+4. VITALLENS ANALYSIS (Backend)
+───────────────────────────────
+If VITALLENS_LOCAL=false (default):
+  → VitalLens(method="vitallens", api_key=...) — cloud API
+  → Uploads MP4 to api.rouast.com for server-side rPPG analysis
 
-┌──────────────────────────────────────────────────────────────────────┐
-│ 6. STATE UPDATE & DISPLAY (Frontend)                                 │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  HealthAnalysisAPI.parseResponse(response)                          │
-│  ↓                                                                   │
-│  Extract vitals: {                                                  │
-│    heartRate: 75,                                                   │
-│    heartRateConfidence: 0.92,                                       │
-│    respiratoryRate: 16,                                             │
-│    respiratoryRateConfidence: 0.85,                                 │
-│    ...                                                              │
-│  }                                                                   │
-│  ↓                                                                   │
-│  Calculate wellness score:                                          │
-│    1. Normalize HR (60-100 = healthy range)                         │
-│    2. Normalize RR (12-20 = healthy range)                          │
-│    3. Apply confidence weighting                                    │
-│    4. Composite score: 0-100                                        │
-│  ↓                                                                   │
-│  Estimate stress level:                                             │
-│    if HRV_normal && confidence > 0.8: "Low"                         │
-│    elif HR_elevated: "Moderate"                                     │
-│    else: "High"                                                     │
-│  ↓                                                                   │
-│  setHealthMetrics(vitals)                                           │
-│  setWellnessScore(score)                                            │
-│  setStressLevel(level)                                              │
-│  ↓                                                                   │
-│  React renders updated component:                                   │
-│    ├─ HealthWidget: HR pulsing animation                            │
-│    ├─ HealthWidget: RR display                                      │
-│    ├─ WellnessWidget: Animated score bar                            │
-│    └─ HealthWidget: Stress level color-coded                        │
-│  ↓                                                                   │
-│  Cleanup: delete temp video files, reset recording state            │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+If VITALLENS_LOCAL=true:
+  → VitalLens(method="CHROM") — fully offline algorithm
+  → No network calls, no quota, runs locally
+
+Both return:
+  { heart_rate, respiratory_rate, hrv_sdnn, hrv_rmssd, ppg_waveform, face_confidence }
+
+5. RESPONSE → FRONTEND
+──────────────────────
+Backend returns JSON → HealthAnalysisAPI.parseResponse()
+  → calculateWellnessScore() → 0–100 composite
+  → estimateStressLevel() → "Low" / "Moderate" / "High"
+  → setHealthMetrics() + setShowReport(true)
+  → HealthReport panel slides up
+
+6. WEATHER (Frontend — AmbientBar)
+────────────────────────────────────
+useWeather hook calls:
+  GET https://api.data.gov.my/weather/forecast
+      ?contains=Kuala+Lumpur@location__location_name&limit=7
+  → Finds today's entry by Malaysia date (UTC+8)
+  → Maps Malay forecast string → English label + Lucide icon
+  → Displays in top-left pill; refreshed every 30 minutes
 ```
 
-### Key Algorithm Details
+### Wellness Score Formula
 
-**rPPG Signal Extraction:**
 ```
-1. Face Detection: Locate face in each frame
-2. ROI Selection: Select cheek regions (high blood flow)
-3. Color Decomposition: Extract R, G, B channels
-4. Temporal Filtering: Remove noise and motion artifacts
-5. PPG Reconstruction: Combine channels to maximize pulsation
-6. FFT Analysis: Convert time-domain PPG to frequency-domain
-7. Peak Detection: Find dominant frequency = heart rate
-```
-
-**Wellness Score Formula:**
-```
-HR_normalized = max(0, 100 - abs(heartRate - 75) / 0.5)
-RR_normalized = max(0, 100 - abs(respiratoryRate - 16) / 0.25)
+HR_normalized = max(0, 100 − abs(heartRate − 75) / 0.5)
+RR_normalized = max(0, 100 − abs(respiratoryRate − 16) / 0.25)
 confidence_weight = (heartRateConfidence + respiratoryRateConfidence) / 2
 
-wellness_score = (HR_normalized * 0.4 + 
-                  RR_normalized * 0.4 + 
-                  confidence_weight * 100 * 0.2)
+wellness_score = HR_normalized * 0.4
+              + RR_normalized * 0.4
+              + confidence_weight * 100 * 0.2
 ```
 
 ---
@@ -481,15 +337,10 @@ wellness_score = (HR_normalized * 0.4 +
 
 ### POST `/api/health/process-video`
 
-Process video file and extract vital signs.
-
 **Request:**
 ```
-POST http://localhost:8000/api/health/process-video
 Content-Type: multipart/form-data
-
-Body:
-  file: <video_blob>  (supported: .webm, .mp4, .mov, .avi, .flv)
+Body: { file: <video_blob> }   Supported: .webm, .mp4, .mov, .avi
 ```
 
 **Response (200 OK):**
@@ -497,414 +348,181 @@ Body:
 {
   "success": true,
   "vital_signs": {
-    "heart_rate": {
-      "value": 75,
-      "confidence": 0.92,
-      "unit": "bpm",
-      "note": "Normal"
-    },
-    "respiratory_rate": {
-      "value": 16,
-      "confidence": 0.85,
-      "unit": "rpm",
-      "note": "Normal"
-    },
-    "hrv_sdnn": {
-      "value": 35,
-      "unit": "ms"
-    },
-    "hrv_rmssd": {
-      "value": 28,
-      "unit": "ms"
-    },
-    "hrv_lfhf": {
-      "value": 1.2
-    },
-    "ppg_waveform": [0.1, 0.2, 0.15, ...],
-    "respiratory_waveform": [0.05, 0.08, ...]
+    "heart_rate":       { "value": 75,   "confidence": 0.92, "unit": "bpm" },
+    "respiratory_rate": { "value": 16,   "confidence": 0.85, "unit": "rpm" },
+    "hrv_sdnn":         { "value": 35,   "unit": "ms" },
+    "hrv_rmssd":        { "value": 28,   "unit": "ms" },
+    "ppg_waveform":     [...],
+    "respiratory_waveform": [...]
   },
-  "face": {
-    "confidence": 0.95,
-    "detected": true
-  },
+  "face": { "confidence": 0.95, "detected": true },
   "message": "Analysis complete"
 }
 ```
 
-**Error Response (500):**
+**Error (500):**
 ```json
-{
-  "detail": "Error processing video: [specific error message]"
-}
+{ "detail": "Error processing video: [specific message]" }
 ```
 
 ### GET `/health`
 
-Health check endpoint.
-
-**Request:**
-```
-GET http://localhost:8000/health
-```
-
-**Response (200 OK):**
 ```json
-{
-  "status": "running",
-  "version": "1.0.0"
-}
+{ "status": "running", "version": "1.0.0" }
+```
+
+---
+
+## Configuration Reference
+
+### `backend/.env`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITALLENS_API_KEY` | *(required for cloud)* | API key from rouast.com/api |
+| `VITALLENS_LOCAL` | `false` | `true` = use offline CHROM algorithm; `false` = cloud API |
+| `FFMPEG_BIN` | *(required)* | Full path to folder containing `ffmpeg.exe` / `ffprobe.exe` |
+| `PORT` | `8000` | Backend server port |
+| `ENVIRONMENT` | `development` | `development` or `production` |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of allowed frontend origins |
+
+### Switching to Local (Offline) Mode
+
+```env
+# backend/.env
+VITALLENS_LOCAL=true
+```
+
+- No VitalLens API key required
+- No network calls for analysis
+- Eliminates SSL/quota/connection errors
+- Slightly different algorithm (CHROM vs VitalLens v3) — accuracy may vary
+
+---
+
+## Project Structure
+
+```
+SmartMirror/
+├── app/
+│   ├── layout.tsx               # Root layout
+│   ├── page.tsx                 # Main page
+│   └── globals.css              # Global styles
+│
+├── components/
+│   ├── smart-mirror.tsx         # Main component — camera, recording, orchestration
+│   ├── ambient-bar.tsx          # Weather (KL) + live clock/date pill bar
+│   ├── health-report.tsx        # Post-scan slide-up report panel
+│   ├── alignment-guide.tsx      # Face oval + scan line (shown only during recording)
+│   ├── led-strip.tsx            # Animated LED border
+│   ├── health-widget.tsx        # Individual metric pill (used inside HealthReport)
+│   ├── wellness-widget.tsx      # Wellness score display
+│   └── ui/                      # shadcn/ui components
+│
+├── hooks/
+│   ├── use-video-recorder.ts    # MediaRecorder hook (50s auto-stop)
+│   ├── use-weather.ts           # KL weather from api.data.gov.my
+│   └── use-clock.ts             # Live clock (updates every second)
+│
+├── lib/
+│   ├── health-analysis-api.ts   # API client + wellness/stress calculations
+│   ├── types.ts                 # TypeScript interfaces
+│   └── utils.ts                 # Helpers
+│
+├── backend/
+│   ├── main.py                  # FastAPI server — video processing, VitalLens
+│   ├── requirements.txt         # Python dependencies
+│   ├── .env                     # Configuration (NOT committed)
+│   └── venv/                    # Python virtual environment
+│
+├── public/
+├── package.json
+├── tsconfig.json
+├── README.md                    # This file
+└── SETUP_GUIDE.md               # Quick-start reference
 ```
 
 ---
 
 ## Troubleshooting
 
-### Issue: "FFmpeg not found" Error
-
-**Symptoms:**
+### "FFmpeg not found"
 ```
-ERROR:main:Error processing video: FFmpeg not found
+ERROR: FFmpeg not found
 ```
-
-**Solution:**
-
-1. Verify FFmpeg is installed:
+1. Check `FFMPEG_BIN` path in `backend/.env`
+2. Verify the exe exists:
    ```powershell
-   ffmpeg -version
+   Test-Path "C:\...\bin\ffmpeg.exe"  # Must be True
    ```
-
-2. Check `FFMPEG_BIN` in `backend/.env`:
-   ```env
-   FFMPEG_BIN=C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin
-   ```
-
-3. Verify the path exists:
-   ```powershell
-   Test-Path "C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe"
-   # Should output: True
-   ```
-
-4. Restart backend server:
-   ```powershell
-   # Stop: Ctrl+C
-   # Restart:
-   cd backend
-   .\venv\Scripts\Activate.ps1
-   python main.py
-   ```
-
----
-
-### Issue: "VitalLens API key not configured"
-
-**Symptoms:**
-```
-ERROR: VitalLens API key not configured
-```
-
-**Solution:**
-
-1. Get API key from https://vitallens.ai
-2. Add to `backend/.env`:
-   ```env
-   VITALLENS_API_KEY=your_actual_key_here
-   ```
-3. Restart backend:
-   ```powershell
-   Ctrl+C  # Stop server
-   python main.py  # Restart
-   ```
-
----
-
-### Issue: "Camera permission denied"
-
-**Symptoms:**
-- Button says "Camera access denied"
-- Video feed doesn't appear
-
-**Solution:**
-
-1. Check browser camera permission in Settings
-2. Grant camera access to browser
-3. Refresh page (F5)
-4. Click "Start Camera" again
-
----
-
-### Issue: "No face detected" or Low Confidence
-
-**Symptoms:**
-```
-Error: "VitalLens could not analyze the video. Ensure video contains a clear face."
-```
-
-**Solution:**
-
-1. **Improve lighting:**
-   - Natural window light or LED lamp
-   - Avoid backlighting or shadows on face
-
-2. **Better positioning:**
-   - Center face in alignment guide
-   - Keep ~12 inches from camera
-   - Ensure full face is visible
-
-3. **Stability:**
-   - Minimize head movement during recording
-   - Keep steady position for full 50 seconds
-
-4. **Retry:**
-   - Click "Start Camera" and try again
-
----
-
-### Issue: "Frame rate information missing" Warning
-
-**Symptoms:**
-```
-WARNING:root:Frame rate information missing
-WARNING:root:Cannot infer number of total frames
-```
-
-**Why it's okay:**
-- FFmpeg successfully converts WebM to MP4
-- VitalLens falls back to duration-based estimation
-- Still provides valid results
-
-**If causing failures:**
-- Ensure recording is full 50 seconds (not shorter)
-- Check video file isn't corrupted
-
----
-
-### Issue: Backend takes too long (>60 seconds)
-
-**Symptoms:**
-- "Analyzing vital signs..." spinner appears for 2+ minutes
-
-**Causes:**
-- VitalLens API queue is busy (free tier)
-- Video quality is poor (more processing needed)
-- Network latency to VitalLens servers
-
-**Solutions:**
-- Try again during off-peak hours
-- Upgrade to VitalLens Pro tier for priority processing
-- Ensure good lighting and face positioning
-
----
-
-### Issue: CORS Error in Browser Console
-
-**Symptoms:**
-```
-Access to XMLHttpRequest has been blocked by CORS policy
-```
-
-**Solution:**
-
-1. Verify backend is running on port 8000:
-   ```powershell
-   netstat -ano | findstr :8000
-   ```
-
-2. Check `CORS_ORIGINS` in `backend/.env`:
-   ```env
-   CORS_ORIGINS=http://localhost:3000,http://localhost:3001
-   ```
-
 3. Restart backend
 
 ---
 
-## Development & Customization
-
-### Project Structure
-
-```
-smart-mirror/
-├── app/                          # Next.js App Router
-│   ├── layout.tsx               # Root layout with providers
-│   ├── page.tsx                 # Main page
-│   └── globals.css              # Global styles
-│
-├── components/                   # React Components
-│   ├── smart-mirror.tsx         # Main mirror component (VIDEO RECORDING)
-│   ├── health-widget.tsx        # Individual metric display
-│   ├── wellness-widget.tsx      # Wellness score widget
-│   ├── alignment-guide.tsx      # Face alignment helper
-│   ├── led-strip.tsx            # Animated LED border
-│   │
-│   └── ui/                      # shadcn/ui Components
-│       └── (50+ reusable components)
-│
-├── hooks/                        # React Hooks
-│   └── use-video-recorder.ts    # Video recording logic
-│
-├── lib/                          # Utilities & Types
-│   ├── health-analysis-api.ts   # API client
-│   ├── types.ts                 # TypeScript interfaces
-│   └── utils.ts                 # Helper functions
-│
-├── backend/                      # FastAPI Backend
-│   ├── main.py                  # Main server (VIDEO PROCESSING)
-│   ├── requirements.txt         # Python dependencies
-│   ├── .env                     # Configuration
-│   └── venv/                    # Python virtual environment
-│
-├── public/                       # Static assets
-├── styles/                       # Additional CSS
-├── package.json                 # Frontend dependencies
-├── tsconfig.json               # TypeScript config
-└── README.md                   # This file
-```
-
-### Extending the System
-
-**Add Database Storage:**
-```python
-# backend/main.py
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-DATABASE_URL = "sqlite:///./vital_signs.db"
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(engine)
-
-# Store results after analysis
-def store_result(vitals, user_id):
-    db = SessionLocal()
-    result = VitalSignRecord(user_id=user_id, vitals=vitals, timestamp=datetime.now())
-    db.add(result)
-    db.commit()
-```
-
-**Add Authentication:**
-```python
-# Secure endpoints with user authentication
-from fastapi.security import HTTPBearer
-security = HTTPBearer()
-
-@app.post("/api/health/process-video")
-async def process_video(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    # Verify token
-    user_id = verify_token(credentials.credentials)
-    # Process video...
-```
-
-**Add History Tracking:**
-```typescript
-// frontend: Store past results
-const [history, setHistory] = useState<AnalysisResult[]>([])
-
-useEffect(() => {
-  const storedHistory = localStorage.getItem('vitalsHistory')
-  if (storedHistory) setHistory(JSON.parse(storedHistory))
-}, [])
-
-const saveResult = (result: AnalysisResult) => {
-  const updated = [...history, { ...result, timestamp: Date.now() }]
-  setHistory(updated)
-  localStorage.setItem('vitalsHistory', JSON.stringify(updated))
-}
-```
+### "VitalLens API key not configured"
+1. Get key from https://www.rouast.com/api
+2. Add `VITALLENS_API_KEY=your_key` to `backend/.env`
+3. Or set `VITALLENS_LOCAL=true` to bypass the cloud API entirely
 
 ---
 
-## Performance & Optimization
-
-### Frontend Performance
-- **Code Splitting:** Next.js auto-splits components
-- **Image Optimization:** Automatic image resizing
-- **CSS-in-JS:** Tailwind CSS for efficient styling
-
-### Backend Performance
-- **Async Processing:** FastAPI non-blocking I/O
-- **Cache VitalLens Client:** Reuse connection across requests
-- **Temp File Cleanup:** Automatic cleanup after analysis
-
-### Video Processing Optimization
-- **WebM → MP4:** Required only for metadata integrity
-- **FFmpeg Settings:** CRF 28 (quality/speed tradeoff)
-- **Parallel Processing:** Future: handle multiple uploads
+### SSL / Connection Aborted / Quota errors
+```
+SSLEOFError / RemoteDisconnected / quota exceeded
+```
+These are cloud API errors. Solutions in order:
+1. **Set `VITALLENS_LOCAL=true`** — eliminates all network issues ✅
+2. Use a different API key account
+3. Reduce recording duration further (already at 50s with 480p compression)
 
 ---
 
-## Security Considerations
-
-⚠️ **Before Production Deployment:**
-
-1. **Secure API Key:**
-   ```env
-   # .env (NEVER commit this)
-   VITALLENS_API_KEY=prod_key_only_in_prod
-   
-   # Use environment variables or secrets manager
-   ```
-
-2. **CORS Restrictions:**
-   ```python
-   CORS_ORIGINS = "https://yourdomain.com"  # Not localhost
-   ```
-
-3. **HTTPS Only:**
-   ```python
-   @app.middleware("http")
-   async def require_https(request, call_next):
-       if request.url.scheme == "http":
-           return RedirectResponse(url=request.url.replace("http", "https"))
-       return await call_next(request)
-   ```
-
-4. **Rate Limiting:**
-   ```python
-   from slowapi import Limiter
-   limiter = Limiter(key_func=get_remote_address)
-   
-   @app.post("/api/health/process-video")
-   @limiter.limit("5/minute")
-   async def process_video(...):
-       # Limited to 5 requests per minute per IP
-   ```
+### "Camera permission denied"
+- Grant camera access in browser Settings → Privacy → Camera
+- Refresh the page (F5) and click "Start Camera" again
 
 ---
 
-## Support & Resources
-
-- **VitalLens Documentation:** https://vitallens.ai/docs
-- **FastAPI Docs:** https://fastapi.tiangolo.com
-- **Next.js Docs:** https://nextjs.org/docs
-- **FFmpeg Documentation:** https://ffmpeg.org/documentation.html
+### "No face detected" / Low confidence
+- Improve **lighting**: bright, even, frontal — avoid backlighting
+- **Center** your face in the oval guide, ~30–40 cm from camera
+- Stay as **still** as possible for the full 50 seconds
+- Retry — some sessions have transient analysis failures
 
 ---
 
-## License
+### Weather shows wrong date / April date instead of today
+Already fixed in `hooks/use-weather.ts` — the hook uses `toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" })` to correctly derive today's date in UTC+8 before filtering the API response.
 
-This project is provided as-is for research and educational purposes.
+---
+
+### CORS errors in browser console
+1. Verify backend is running: `curl http://localhost:8000/health`
+2. Check `CORS_ORIGINS` in `backend/.env` matches your frontend URL
+3. Restart backend
 
 ---
 
 ## Changelog
 
-### v1.0.0 (Current)
-- ✅ Real-time vital signs analysis via rPPG
-- ✅ WebM to MP4 video conversion
-- ✅ beautiful Mirror UI with LED animations
-- ✅ Heart rate, respiratory rate, HRV support
-- ✅ Wellness score and stress level estimation
-- ✅ Complete error handling and recovery
+### v1.2.0 — March 2026 (Current)
+- ✅ **Ambient Bar** — Live KL weather (data.gov.my, no API key) + clock/date
+- ✅ **Post-scan Health Report** — Metrics shown as a slide-up report panel; removed from idle top bar
+- ✅ **Alignment guide** — Now only visible during active recording
+- ✅ **Weather date fix** — Correct Malaysia date matching using UTC+8 timezone
 
-### Future Improvements
-- 📋 User history/dashboard
-- 📊 Data export (CSV, PDF)
-- 🔐 User authentication
-- 📱 Mobile app
-- 🧠 AI-powered stress detection
-- 🎯 Guided breathing exercises
-- 📈 Long-term trend analysis
+### v1.1.0 — March 2026
+- ✅ **50-second auto-recording** — Countdown timer + circular arc; no manual Stop button
+- ✅ **FFmpeg 480p/CRF-32 compression** — Dramatically smaller upload, fewer SSL errors
+- ✅ **Local processing mode** (`VITALLENS_LOCAL=true`) — Offline CHROM algorithm, no quotas
+- ✅ **Stale closure bug fix** — Countdown timer no longer goes negative
+
+### v1.0.0
+- ✅ Real-time vital signs via rPPG (VitalLens cloud)
+- ✅ WebM→MP4 conversion, LED animation, alignment guide
+- ✅ Wellness score, stress level, HRV
 
 ---
 
-**Last Updated:** March 28, 2026  
+**Last Updated:** March 29, 2026  
 **Status:** ✅ Fully Functional
