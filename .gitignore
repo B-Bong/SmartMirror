@@ -9,8 +9,24 @@ next.user-config.*
 
 # Environment variables
 .env*.local
+.env
+.env.*
+!.env.example
+backend/.env
+
+# Secrets and credentials
+backend/vitallens_*.json
+*.pem
+*.key
 
 # Common ignores
 node_modules
 .next/
 .DS_Store
+
+# Python virtual environments and caches
+venv/
+.venv/
+backend/venv/
+__pycache__/
+*.pyc

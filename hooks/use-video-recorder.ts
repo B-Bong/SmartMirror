@@ -65,7 +65,15 @@ export const useVideoRecorder = (options: UseVideoRecorderOptions = {}) => {
           setDuration(elapsedTime)
 
           if (elapsedTime >= maxDuration) {
-            stopRecording()
+            // Clear interval directly here — avoids stale closure in stopRecording()
+            if (timerRef.current) {
+              clearInterval(timerRef.current)
+              timerRef.current = null
+            }
+            if (mediaRecorderRef.current) {
+              mediaRecorderRef.current.stop()
+              setIsRecording(false)
+            }
           }
         }, 1000)
       } catch (err) {

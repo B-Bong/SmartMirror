@@ -1,11 +1,11 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { Heart, Wind, Brain, Play, Square, Loader } from "lucide-react"
-import { HealthWidget } from "@/components/health-widget"
+import { Play, Square, Loader } from "lucide-react"
 import { AlignmentGuide } from "@/components/alignment-guide"
-import { WellnessWidget } from "@/components/wellness-widget"
 import { LedStrip } from "@/components/led-strip"
+import { AmbientBar } from "@/components/ambient-bar"
+import { HealthReport } from "@/components/health-report"
 import { useVideoRecorder } from "@/hooks/use-video-recorder"
 import { HealthAnalysisAPI } from "@/lib/health-analysis-api"
 import { HealthMetrics } from "@/lib/types"
@@ -34,6 +34,7 @@ export default function SmartMirror() {
   const [wellnessScore, setWellnessScore] = useState(85)
   const [stressLevel, setStressLevel] = useState<"Low" | "Moderate" | "High">("Low")
   const [error, setError] = useState<string | null>(null)
+  const [showReport, setShowReport] = useState(false)
   
   // Video recording
   const { isRecording, duration, startRecording, stopRecording, resetRecording } = useVideoRecorder({
@@ -60,6 +61,7 @@ export default function SmartMirror() {
       
       setWellnessScore(wellness)
       setStressLevel(stress)
+      setShowReport(true)
       
       console.log("[SmartMirror] Analysis complete:", { metrics, wellness, stress })
     } catch (err) {
@@ -75,6 +77,7 @@ export default function SmartMirror() {
   const handleStartRecording = async () => {
     try {
       setError(null)
+      setShowReport(false)
       if (streamRef.current) {
         resetRecording()
         await startRecording(streamRef.current)
@@ -85,9 +88,6 @@ export default function SmartMirror() {
     }
   }
 
-  const handleStopRecording = () => {
-    stopRecording()
-  }
 
   const startCamera = async () => {
     try {
@@ -198,65 +198,58 @@ export default function SmartMirror() {
         {/* ── RIGHT LED strip ── */}
         <LedStrip side="right" scanning={isActive} />
 
-        {/* ── Center Alignment Guide ── */}
-        <AlignmentGuide scanning={isActive} />
+        {/* ── Center Alignment Guide (only while recording) ── */}
+        {isRecording && <AlignmentGuide scanning={true} />}
 
-        {/* ── Top metric bar ── */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
-          <div
-            className="flex items-stretch divide-x"
-            style={{
-              background: "rgba(0,0,0,0.55)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              backdropFilter: "blur(24px)",
-              WebkitBackdropFilter: "blur(24px)",
-              borderRadius: "999px",
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(255,255,255,0.04) inset",
-            }}
-          >
-            <HealthWidget
-              icon={<Heart size={13} strokeWidth={2} className={healthMetrics.heartRate ? "animate-pulse" : ""} />}
-              value={healthMetrics.heartRate ? Math.round(healthMetrics.heartRate).toString() : "--"}
-              unit="BPM"
-              label="Heart"
-              accentColor="#f9a8b8"
-            />
-            <HealthWidget
-              icon={<Wind size={13} strokeWidth={2} />}
-              value={healthMetrics.respiratoryRate ? Math.round(healthMetrics.respiratoryRate).toString() : "--"}
-              unit="br/m"
-              label="Resp"
-              accentColor="#7dd3e8"
-            />
-            <WellnessWidget score={wellnessScore} />
-            <HealthWidget
-              icon={<Brain size={13} strokeWidth={2} />}
-              value={stressLevel}
-              label="Stress"
-              accentColor="#c4b5fd"
-            />
-          </div>
-        </div>
+        {/* ── Ambient Bar: Weather + Clock ── */}
+        <AmbientBar />
 
-        {/* ── Recording Duration Display ── */}
+        {/* ── Recording Countdown Display ── */}
         {isRecording && (
           <div className="absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 z-40">
             <div
-              className="flex flex-col items-center justify-center gap-4 px-8 py-6 rounded-2xl"
+              className="flex flex-col items-center justify-center gap-3 px-8 py-6 rounded-2xl"
               style={{
-                background: "rgba(0,0,0,0.7)",
+                background: "rgba(0,0,0,0.72)",
                 border: "1px solid rgba(255,255,255,0.1)",
                 backdropFilter: "blur(24px)",
                 WebkitBackdropFilter: "blur(24px)",
               }}
             >
-              <div className="text-center">
-                <p className="text-sm font-medium text-gray-300 mb-2">Recording...</p>
-                <p className="text-4xl font-bold text-red-400">{duration}s</p>
-                <p className="text-xs text-gray-400 mt-1">
-                  {RECORDING_DURATION - duration}s remaining
-                </p>
+              {/* Circular countdown ring */}
+              <div className="relative flex items-center justify-center" style={{ width: 96, height: 96 }}>
+                <svg
+                  width="96"
+                  height="96"
+                  style={{ position: "absolute", top: 0, left: 0, transform: "rotate(-90deg)" }}
+                >
+                  {/* Background track */}
+                  <circle cx="48" cy="48" r="42" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="5" />
+                  {/* Countdown arc — shrinks as time passes */}
+                  <circle
+                    cx="48"
+                    cy="48"
+                    r="42"
+                    fill="none"
+                    stroke="#f87171"
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeDasharray={`${2 * Math.PI * 42}`}
+                    strokeDashoffset={`${2 * Math.PI * 42 * (duration / RECORDING_DURATION)}`}
+                    style={{ transition: "stroke-dashoffset 0.9s linear" }}
+                  />
+                </svg>
+                <div className="flex flex-col items-center">
+                  <span className="text-3xl font-bold text-red-400" style={{ lineHeight: 1 }}>
+                    {Math.max(0, RECORDING_DURATION - duration)}
+                  </span>
+                  <span className="text-xs text-gray-400 mt-0.5">sec</span>
+                </div>
               </div>
+              {/* Label */}
+              <p className="text-xs font-medium tracking-widest uppercase" style={{ color: "rgba(255,255,255,0.45)" }}>
+                Recording
+              </p>
             </div>
           </div>
         )}
@@ -270,6 +263,16 @@ export default function SmartMirror() {
               <p className="text-sm text-gray-300">This may take a minute</p>
             </div>
           </div>
+        )}
+
+        {/* ── Health Report (post-scan) ── */}
+        {showReport && !healthMetrics.isAnalyzing && (
+          <HealthReport
+            metrics={healthMetrics}
+            wellnessScore={wellnessScore}
+            stressLevel={stressLevel}
+            onDismiss={() => setShowReport(false)}
+          />
         )}
 
         {/* ── Error Message ── */}
@@ -361,23 +364,7 @@ export default function SmartMirror() {
             </button>
           )}
 
-          {isRecording && (
-            <button
-              onClick={handleStopRecording}
-              className="flex items-center justify-center gap-2 px-5 py-3 rounded-full font-medium transition-all duration-300 hover:scale-105 active:scale-95"
-              style={{
-                background: "rgba(239, 68, 68, 0.3)",
-                border: "1px solid rgba(239, 68, 68, 0.5)",
-                backdropFilter: "blur(24px)",
-                WebkitBackdropFilter: "blur(24px)",
-                color: "#fca5a5",
-                boxShadow: "0 0 16px 0px rgba(239, 68, 68, 0.3), 0 0 0 0.5px rgba(239, 68, 68, 0.4) inset",
-              }}
-            >
-              <Square size={16} fill="currentColor" />
-              <span>Stop & Analyze</span>
-            </button>
-          )}
+
         </div>
       </div>
     </div>

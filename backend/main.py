@@ -53,7 +53,10 @@ def convert_webm_to_mp4(webm_path: str) -> str:
     try:
         logger.info(f"Converting {webm_path} to MP4 format at {VIDEO_FPS} fps...")
         result = subprocess.run(
-            ["ffmpeg", "-i", webm_path, "-r", str(VIDEO_FPS), "-c:v", "libx264", "-crf", "28", "-c:a", "aac", "-y", mp4_path],
+            ["ffmpeg", "-i", webm_path, "-r", str(VIDEO_FPS),
+             "-vf", "scale='min(640,iw)':-2",  # cap at 640px wide, keep aspect
+             "-c:v", "libx264", "-crf", "32", "-preset", "fast",
+             "-c:a", "aac", "-y", mp4_path],
             capture_output=True,
             text=True,
             timeout=60
