@@ -5,3 +5,8 @@ python-dotenv>=1.0.0
 vitallens>=0.6.1
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+# Fall detection
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+websockets>=12.0

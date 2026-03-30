@@ -6,6 +6,7 @@ FastAPI backend for analyzing vital signs using the VitalLens API.
 
 - **Video Processing**: Accepts video files and processes them with VitalLens API
 - **Vital Signs Extraction**: Returns heart rate, respiration rate, HRV metrics
+- **Real-Time Fall Detection**: YOLOv11m-pose pose estimation via WebSocket (5 FPS)
 - **CORS Support**: Configured for Next.js frontend communication
 - **Error Handling**: Comprehensive error responses for debugging
 
@@ -14,10 +15,11 @@ FastAPI backend for analyzing vital signs using the VitalLens API.
 - Python 3.10+
 - FFmpeg installed and in PATH
 - VitalLens API key (free tier available at https://www.rouast.com/api)
+- **YOLOv11m-pose Model**: You must place `yolo11m-pose.pt` in `backend/models/` for fall detection to start.
 
 ### Windows Requirements
 
-- Microsoft Visual C++ Build Tools (for onnxruntime)
+- Microsoft Visual C++ Build Tools (for onnxruntime / ultralytics)
 - Download: https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
 ## Setup
@@ -134,6 +136,23 @@ Health check endpoint.
 {
   "status": "ok",
   "version": "1.0.0"
+}
+```
+
+### WebSocket `/ws/fall-detection`
+
+Real-time fall detection using YOLOv11m-pose.
+
+**Protocol:**
+- Client → Server: Raw JPEG bytes (`ArrayBuffer` or `Blob`). Recommended: 320x240 px at 5 FPS.
+- Server → Client: JSON status string.
+  
+**Response Format:**
+```json
+{
+  "fall_detected": true/false,
+  "global_fall_detected": true/false,
+  "people_count": 1
 }
 ```
 

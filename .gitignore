@@ -30,3 +30,7 @@ venv/
 backend/venv/
 __pycache__/
 *.pyc
+
+# AI Models (ignore large weights files)
+*.pt
+backend/models/

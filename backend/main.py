@@ -1,13 +1,16 @@
 """
 FastAPI backend for Smart Mirror rPPG analysis
 Integrates with VitalLens API for vital signs estimation
+Also provides real-time fall detection via WebSocket.
 """
 
 import os
+import asyncio
 import logging
 import shutil
 import subprocess
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from typing import Optional
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -16,6 +19,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import tempfile
 import json
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -96,6 +100,12 @@ if not VITALLENS_API_KEY:
 # Initialize VitalLens client
 vl = None
 
+# ── Fall detection ────────────────────────────────────────────────────────────
+# Model is loaded once at startup and shared across WebSocket connections.
+# Each connection gets its own FallDetector instance for isolated tracking state.
+FALL_MODEL_PATH = os.getenv("FALL_MODEL_PATH", "models/yolo11m-pose.pt")
+fall_yolo_model = None  # type: Optional[object]
+
 
 def get_vitallens():
     """Lazy initialize VitalLens client"""
@@ -158,6 +168,12 @@ async def process_video(file: UploadFile = File(...)):
         # Process video with VitalLens
         vl_client = get_vitallens()
         results = vl_client(video_to_process)
+
+        # Save raw API response to disk for external use
+        raw_filename = f"vitallens_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(raw_filename, "w") as f:
+            json.dump(results, f, indent=4)
+        logger.info(f"Raw VitalLens response saved to: {raw_filename}")
 
         # Extract vital signs from first result (single video processing)
         if not results or len(results) == 0:
@@ -309,14 +325,80 @@ async def process_video_base64(data: dict):
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler"""
+    global fall_yolo_model
     logger.info("Smart Mirror rPPG API starting...")
     logger.info(f"CORS Origins: {os.getenv('CORS_ORIGINS', 'http://localhost:3000')}")
+
+    # Load fall detection model (expensive — do it once at startup)
+    try:
+        from fall_detection import load_fall_model
+        fall_yolo_model = load_fall_model(FALL_MODEL_PATH)
+        if fall_yolo_model:
+            logger.info(f"Fall detection ready: {FALL_MODEL_PATH}")
+        else:
+            logger.warning("Fall detection disabled — model file not found at: " + FALL_MODEL_PATH)
+    except Exception as exc:
+        logger.error(f"Failed to initialise fall detection: {exc}", exc_info=True)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Shutdown event handler"""
     logger.info("Smart Mirror rPPG API shutting down...")
+
+
+# ── Fall Detection WebSocket ───────────────────────────────────────────────────
+
+@app.websocket("/ws/fall-detection")
+async def fall_detection_ws(websocket: WebSocket):
+    """
+    Real-time fall detection via WebSocket.
+
+    Protocol:
+      Client → Server : raw JPEG bytes (single frame, 320×240 recommended)
+      Server → Client : JSON string matching FallDetectionResult schema
+
+    Each connection gets a fresh FallDetector so tracking state (prev_positions,
+    fall_timers, global_fall_timer) is fully isolated per session.
+    Inference runs in a thread-pool executor so the async event loop is never
+    blocked by the CPU-bound YOLO forward pass.
+    """
+    await websocket.accept()
+
+    if fall_yolo_model is None:
+        # Gracefully inform the client instead of silently closing
+        await websocket.send_json({
+            "error":                "Fall detection model not loaded",
+            "fall_detected":        False,
+            "global_fall_detected": False,
+            "people_count":         0,
+            "people":               [],
+        })
+        await websocket.close(code=1011, reason="Model not loaded")
+        return
+
+    from fall_detection import FallDetector
+    detector = FallDetector(fall_yolo_model)
+    loop = asyncio.get_running_loop()
+
+    logger.info("Fall detection WebSocket connected")
+    try:
+        while True:
+            # Receive one JPEG frame from the browser
+            jpeg_bytes = await websocket.receive_bytes()
+
+            # Run inference in thread pool (CPU-bound YOLO — must not block loop)
+            result = await loop.run_in_executor(
+                None, detector.process_frame, jpeg_bytes
+            )
+
+            # Send detection result back as JSON
+            await websocket.send_json(result)
+
+    except WebSocketDisconnect:
+        logger.info("Fall detection WebSocket disconnected")
+    except Exception as exc:
+        logger.error(f"Fall detection WebSocket error: {exc}", exc_info=True)
 
 
 if __name__ == "__main__":

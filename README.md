@@ -47,6 +47,7 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 
 ✅ **Auto Recording** — 50-second countdown timer; recording starts and stops automatically  
 ✅ **Live Ambient Bar** — Real-time KL weather (data.gov.my) + clock/date always visible  
+✅ **Real-Time Fall Detection** — YOLOv11m-pose runs in background via WebSocket at 5fps 
 ✅ **Post-scan Health Report** — Metrics slide up after analysis (not cluttering the idle view)  
 ✅ **Alignment Guide** — Face oval + scan animation appears only during active recording  
 ✅ **LED Strip Animation** — Animated border reacts to scanning state  
@@ -70,7 +71,8 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 │  │  ├─ 50s auto-recording countdown      ├─ FFmpeg 480p/CRF-32  │
 │  │  ├─ AmbientBar (weather + clock)      ├─ WebM → MP4 convert  │
 │  │  ├─ AlignmentGuide (scan only)        ├─ VitalLens cloud API │
-│  │  ├─ HealthReport (post-scan panel)    └─ OR local CHROM mode │
+│  │  ├─ HealthReport (post-scan panel)    ├─ OR local CHROM mode │
+│  │  ├─ FallAlert (glassmorphic modal)    └─ YOLOv11m-pose Infer │
 │  │  └─ Camera Permission Flow                                   │
 │  │                                       External Data Sources  │
 │  ├─ AmbientBar component                 ├─ api.data.gov.my     │
@@ -80,7 +82,9 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 │  ├─ HealthReport component                                      │
 │  ├─ AlignmentGuide component                                    │
 │  ├─ LedStrip component                                          │
-│  └─ API Client (health-analysis-api.ts)                         │
+│  ├─ FallAlert component                                         │
+│  ├─ API Client (health-analysis-api.ts)                         │
+│  └─ Hooks (use-video-recorder.ts, use-fall-detection.ts)        │
 │                                                                 │
 │  Video Pipeline:                                                │
 │  Browser (WebM 50s) → Backend → FFmpeg 480p MP4                │
@@ -317,6 +321,16 @@ useWeather hook calls:
   → Finds today's entry by Malaysia date (UTC+8)
   → Maps Malay forecast string → English label + Lucide icon
   → Displays in top-left pill; refreshed every 30 minutes
+
+7. FALL DETECTION (Parallel Background Process)
+─────────────────────────────────────────────
+run_in_executor(YOLOv11m-pose) loop in backend:
+  → Browser captures 320x240 JPEG at 5 fps
+  → Sent via WebSocket: ws://localhost:8000/ws/fall-detection
+  → Backend runs pose inference (extracts 4 keypoints)
+  → Calculates: High downward velocity + >60° torso angle + wide bounding box
+  → Returns { fall_detected: true/false }
+  → Frontend shows full-screen "FALL ALERT" modal if detected
 ```
 
 ### Wellness Score Formula
@@ -505,7 +519,12 @@ Already fixed in `hooks/use-weather.ts` — the hook uses `toLocaleDateString("e
 
 ## Changelog
 
-### v1.2.0 — March 2026 (Current)
+### v1.3.0 — March 2026 (Current)
+- ✅ **Real-Time Fall Detection** — YOLOv11m-pose integration via FastAPI WebSockets processing at 5fps natively.
+- ✅ **Fall Alert Overlay** — Premium glassmorphic "FALL ALERT" UI with manual dismiss.
+- ✅ **Monitoring Badge** — Green pulsing indicator when fall monitoring is active.
+
+### v1.2.0 — March 2026
 - ✅ **Ambient Bar** — Live KL weather (data.gov.my, no API key) + clock/date
 - ✅ **Post-scan Health Report** — Metrics shown as a slide-up report panel; removed from idle top bar
 - ✅ **Alignment guide** — Now only visible during active recording
