@@ -241,7 +241,15 @@ def update_average_output(result_item: dict) -> None:
     if heart_rate is not None and respiratory_rate is not None:
         hr_norm = max(0, 100 - abs(heart_rate - 75) / 0.5)
         rr_norm = max(0, 100 - abs(respiratory_rate - 16) / 0.25)
-        wellness_score = round(hr_norm * 0.4 + rr_norm * 0.4 + 20)
+        
+        # HRV component (Scaling 15ms -> 0 to 55ms -> 100)
+        if hrv_sdnn is not None:
+            hrv_norm = min(100, max(0, (hrv_sdnn - 15) * 2.5))
+        else:
+            hrv_norm = 40  # Penalty for no HRV data or use moderate assumption
+        
+        # New weighted calculation (30% HR, 30% RR, 25% HRV, 15% Base Confidence)
+        wellness_score = round(hr_norm * 0.3 + rr_norm * 0.3 + hrv_norm * 0.25 + 15)
         wellness_score = max(0, min(100, wellness_score))
 
     output_data = {

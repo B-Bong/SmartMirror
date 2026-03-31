@@ -369,11 +369,13 @@ run_in_executor(YOLOv11m-pose) loop in backend:
 ```
 HR_normalized = max(0, 100 − abs(heartRate − 75) / 0.5)
 RR_normalized = max(0, 100 − abs(respiratoryRate − 16) / 0.25)
-confidence_weight = (heartRateConfidence + respiratoryRateConfidence) / 2
+HRV_normalized = min(100, max(0, (hrv_sdnn − 15) * 2.5))
+measurement_confidence = 0.85 (averaged from sensors)
 
-wellness_score = HR_normalized * 0.4
-              + RR_normalized * 0.4
-              + confidence_weight * 100 * 0.2
+wellness_score = HR_normalized * 0.3
+              + RR_normalized * 0.3
+              + HRV_normalized * 0.25
+              + measurement_confidence * 100 * 0.15
 ```
 
 ---
