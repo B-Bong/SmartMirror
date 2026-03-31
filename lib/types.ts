@@ -41,6 +41,10 @@ export interface HealthAnalysisResponse {
   vital_signs: VitalSigns
   face: FaceData
   message: string
+  summary?: {
+    wellness_score: number
+    stress_level: "Low" | "Moderate" | "High"
+  }
 }
 
 /**

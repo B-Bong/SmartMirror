@@ -9,8 +9,9 @@ import asyncio
 import logging
 import shutil
 import subprocess
+import math
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -19,7 +20,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 import tempfile
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from supabase import create_client, Client as SupabaseClient
+from health_insights import generate_and_store_insights
 
 # Load environment variables
 load_dotenv()
@@ -49,7 +52,250 @@ def ensure_video_tools() -> None:
 ensure_video_tools()
 
 # Video processing configuration
-VIDEO_FPS = int(os.getenv("VIDEO_FPS", "30"))
+VIDEO_FPS = int(os.getenv("VIDEO_FPS", "15"))
+BASE_DIR = Path(__file__).resolve().parent
+AVERAGE_JSON_PATH = BASE_DIR / "vitals_average.json"
+
+# ── Supabase ──────────────────────────────────────────────────────────────────
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+ELDERLY_ID = os.getenv("ELDERLY_ID", "1b9418fc-a707-4da1-8a44-c30c11ac1ee8")
+
+supabase: SupabaseClient | None = None
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        logger.info("Supabase client initialised successfully")
+    except Exception as exc:
+        logger.error(f"Failed to initialise Supabase client: {exc}")
+else:
+    logger.warning("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set — database uploads disabled")
+
+AVERAGE_METRICS = {
+    "heart_rate": {
+        "label": "Heart Rate",
+        "source_key": "heart_rate",
+        "unit": "bpm",
+    },
+    "respiratory_rate": {
+        "label": "Respiratory Rate",
+        "source_key": "respiratory_rate",
+        "unit": "rpm",
+    },
+    "hrv_sdnn": {
+        "label": "HRV (SDNN)",
+        "source_key": "hrv_sdnn",
+        "unit": "ms",
+    },
+    "hrv_rmssd": {
+        "label": "HRV (RMSSD)",
+        "source_key": "hrv_rmssd",
+        "unit": "ms",
+    },
+    "hrv_lfhf": {
+        "label": "HRV (LF/HF)",
+        "source_key": "hrv_lfhf",
+        "unit": "ratio",
+    },
+}
+
+
+def _to_float(value) -> Optional[float]:
+    """Convert a numeric value to float; return None for invalid values."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rolling_metric_mean(result_item: dict, metric_name: str) -> Optional[float]:
+    """Compute mean of valid rolling metric values (ignoring NaN/inf)."""
+    rolling_series = (
+        result_item.get("rolling_vitals", {})
+        .get(metric_name, {})
+        .get("data", [])
+    )
+    if not isinstance(rolling_series, list):
+        return None
+
+    valid_values = []
+    for raw in rolling_series:
+        value = _to_float(raw)
+        if value is None or math.isnan(value) or math.isinf(value):
+            continue
+        valid_values.append(value)
+
+    if not valid_values:
+        return None
+    return sum(valid_values) / len(valid_values)
+
+
+def _extract_measurement_values(result_item: dict) -> dict:
+    """Extract tracked metric values, with Heart Rate fallback from rolling data."""
+    vital_signs = result_item.get("vitals", {})
+    measurement_values = {}
+    for metric_name, config in AVERAGE_METRICS.items():
+        source_data = vital_signs.get(config["source_key"], {})
+        measurement_values[metric_name] = _to_float(source_data.get("value"))
+
+    # Some VitalLens payloads omit global heart_rate while still providing rolling values.
+    if measurement_values["heart_rate"] is None:
+        measurement_values["heart_rate"] = _rolling_metric_mean(result_item, "heart_rate")
+
+    return measurement_values
+
+
+def _build_heart_rate_response(result_item: dict, vital_signs: dict) -> dict:
+    """Return heart-rate payload with fallback to rolling average when needed."""
+    hr_payload = vital_signs.get("heart_rate", {})
+    hr_value = _to_float(hr_payload.get("value"))
+
+    if hr_value is not None and not math.isnan(hr_value) and not math.isinf(hr_value):
+        return {
+            "value": hr_value,
+            "unit": hr_payload.get("unit", "bpm"),
+            "confidence": hr_payload.get("confidence"),
+            "note": hr_payload.get("note"),
+        }
+
+    fallback_hr = _rolling_metric_mean(result_item, "heart_rate")
+    rolling_hr = result_item.get("rolling_vitals", {}).get("heart_rate", {})
+    return {
+        "value": fallback_hr,
+        "unit": rolling_hr.get("unit", "bpm"),
+        "confidence": hr_payload.get("confidence"),
+        "note": (
+            "Computed from rolling heart-rate series (mean of valid frame-wise values)."
+            if fallback_hr is not None
+            else hr_payload.get("note")
+        ),
+    }
+
+
+def update_average_output(result_item: dict) -> None:
+    """Update persistent running averages and write them to vitals_average.json."""
+    measurement_values = _extract_measurement_values(result_item)
+
+    if AVERAGE_JSON_PATH.exists():
+        try:
+            with open(AVERAGE_JSON_PATH, "r", encoding="utf-8") as f:
+                average_data = json.load(f)
+        except Exception:
+            average_data = {}
+    else:
+        average_data = {}
+
+    metrics_state = average_data.get("metrics", {})
+
+    output_metrics = {}
+    flat_metrics = {}
+    for metric_name, config in AVERAGE_METRICS.items():
+        previous = metrics_state.get(metric_name, {})
+        prev_count = int(previous.get("count", 0)) if isinstance(previous, dict) else 1
+        prev_average = _to_float(previous.get("average")) if isinstance(previous, dict) else _to_float(previous)
+        if prev_average is None:
+            prev_average = 0.0
+
+        current_value = measurement_values.get(metric_name)
+        if current_value is None:
+            new_count = prev_count
+            new_average = prev_average if prev_count > 0 else None
+        else:
+            new_count = prev_count + 1
+            new_average = ((prev_average * prev_count) + current_value) / new_count
+
+        # Save the new state for reading next time (internal format)
+        output_metrics[metric_name] = {
+            "label": config["label"],
+            "unit": config["unit"],
+            "latest": current_value,
+            "average": round(new_average, 4) if new_average is not None else None,
+            "count": new_count,
+        }
+        
+        flat_metrics[metric_name] = round(new_average, 4) if new_average is not None else None
+
+    # Save state internally so counting still works
+    state_data = {
+        "updated_at": datetime.now().isoformat(),
+        "metrics": output_metrics,
+    }
+    with open(AVERAGE_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(state_data, f, indent=4)
+
+    # Calculate Summary metrics
+    heart_rate = flat_metrics.get("heart_rate")
+    respiratory_rate = flat_metrics.get("respiratory_rate")
+    hrv_sdnn = flat_metrics.get("hrv_sdnn")
+
+    stress_level = "Low"
+    if heart_rate is not None:
+        if heart_rate > 100:
+            stress_level = "High"
+        elif heart_rate > 90 or hrv_sdnn is None:
+            stress_level = "Moderate"
+
+    wellness_score = 0
+    if heart_rate is not None and respiratory_rate is not None:
+        hr_norm = max(0, 100 - abs(heart_rate - 75) / 0.5)
+        rr_norm = max(0, 100 - abs(respiratory_rate - 16) / 0.25)
+        wellness_score = round(hr_norm * 0.4 + rr_norm * 0.4 + 20)
+        wellness_score = max(0, min(100, wellness_score))
+
+    output_data = {
+        "updated_at": datetime.now().isoformat(),
+        "metrics": flat_metrics,
+        "summary": {
+            "wellness_score": wellness_score,
+            "stress_level": stress_level
+        }
+    }
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamped_json_path = BASE_DIR / f"vitals_average_{timestamp}.json"
+
+    with open(timestamped_json_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=4)
+
+    logger.info(f"Running averages saved to: {timestamped_json_path.name}")
+
+    return flat_metrics, wellness_score, stress_level
+
+
+def upload_vitals_to_supabase(flat_metrics: dict, wellness_score: int, stress_level: str) -> Optional[str]:
+    """Insert a row into the `vitals` table and update the `elderlies` row.
+
+    Silently logs on failure so it never breaks the main measurement flow.
+    """
+    if supabase is None:
+        logger.warning("Supabase client not available — skipping DB upload")
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    vitals_row = {
+        "elderly_id":       ELDERLY_ID,
+        "heart_rate":       flat_metrics.get("heart_rate"),
+        "respiratory_rate": flat_metrics.get("respiratory_rate"),
+        "hrv_sdnn":         flat_metrics.get("hrv_sdnn"),
+        "hrv_rmssd":        flat_metrics.get("hrv_rmssd"),
+        "hrv_lfhf":         flat_metrics.get("hrv_lfhf"),
+        "wellness_score":   wellness_score,
+        "stress_level":     stress_level,
+        "recorded_at":      now_iso,
+    }
+
+    try:
+        result = supabase.table("vitals").insert(vitals_row).execute()
+        vitals_id = result.data[0]['id'] if result.data else None
+        logger.info(f"Vitals uploaded to Supabase (id={vitals_id})")
+        return vitals_id
+    except Exception as exc:
+        logger.error(f"Failed to insert vitals into Supabase: {exc}", exc_info=True)
+        return None
+
 
 def convert_webm_to_mp4(webm_path: str) -> str:
     """Convert WebM video to MP4 for better compatibility with VitalLens."""
@@ -127,7 +373,7 @@ async def health_check():
 
 
 @app.post("/api/health/process-video")
-async def process_video(file: UploadFile = File(...)):
+async def process_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Process video file and return vital signs
     
@@ -182,32 +428,61 @@ async def process_video(file: UploadFile = File(...)):
                 detail="VitalLens could not analyze the video. Ensure video contains a clear face."
             )
 
-        vital_signs = results[0].get("vitals", {})
+        result_item = results[0]
+        vital_signs = result_item.get("vitals", {})
+        heart_rate_response = _build_heart_rate_response(result_item, vital_signs)
+
+        # Persist running averages for key vital metrics after each measurement.
+        flat_metrics, ws_score, sl_level = update_average_output(result_item)
+        vitals_id = upload_vitals_to_supabase(flat_metrics, ws_score, sl_level)
+
+        # Trigger background task for health insights
+        if vitals_id and supabase:
+            vitals_data_for_llm = {
+                "heart_rate": flat_metrics.get("heart_rate"),
+                "respiratory_rate": flat_metrics.get("respiratory_rate"),
+                "hrv_sdnn": flat_metrics.get("hrv_sdnn"),
+                "hrv_rmssd": flat_metrics.get("hrv_rmssd"),
+                "hrv_lfhf": flat_metrics.get("hrv_lfhf"),
+                "wellness_score": ws_score,
+                "stress_level": sl_level
+            }
+            background_tasks.add_task(
+                generate_and_store_insights,
+                supabase,
+                ELDERLY_ID,
+                vitals_id,
+                vitals_data_for_llm
+            )
 
         # Format response
         response_data = {
             "success": True,
             "vital_signs": {
                 "heart_rate": {
-                    "value": vital_signs.get("heart_rate", {}).get("value"),
-                    "unit": vital_signs.get("heart_rate", {}).get("unit", "bpm"),
-                    "confidence": vital_signs.get("heart_rate", {}).get("confidence"),
-                    "note": vital_signs.get("heart_rate", {}).get("note")
+                    "value": flat_metrics.get("heart_rate"),
+                    "unit": heart_rate_response.get("unit", "bpm"),
+                    "confidence": heart_rate_response.get("confidence"),
+                    "note": heart_rate_response.get("note")
                 },
                 "respiratory_rate": {
-                    "value": vital_signs.get("respiratory_rate", {}).get("value"),
+                    "value": flat_metrics.get("respiratory_rate"),
                     "unit": vital_signs.get("respiratory_rate", {}).get("unit", "rpm"),
                     "confidence": vital_signs.get("respiratory_rate", {}).get("confidence"),
                     "note": vital_signs.get("respiratory_rate", {}).get("note")
                 },
-                "hrv_sdnn": vital_signs.get("hrv_sdnn", {}),
-                "hrv_rmssd": vital_signs.get("hrv_rmssd", {}),
-                "hrv_lfhf": vital_signs.get("hrv_lfhf", {}),
+                "hrv_sdnn": { **vital_signs.get("hrv_sdnn", {}), "value": flat_metrics.get("hrv_sdnn") } if vital_signs.get("hrv_sdnn") else vital_signs.get("hrv_sdnn", {}),
+                "hrv_rmssd": { **vital_signs.get("hrv_rmssd", {}), "value": flat_metrics.get("hrv_rmssd") } if vital_signs.get("hrv_rmssd") else vital_signs.get("hrv_rmssd", {}),
+                "hrv_lfhf": { **vital_signs.get("hrv_lfhf", {}), "value": flat_metrics.get("hrv_lfhf") } if vital_signs.get("hrv_lfhf") else vital_signs.get("hrv_lfhf", {}),
                 "ppg_waveform": vital_signs.get("ppg_waveform", {}),
                 "respiratory_waveform": vital_signs.get("respiratory_waveform", {}),
             },
-            "face": results[0].get("face", {}),
-            "message": results[0].get("message", "")
+            "summary": {
+                "wellness_score": ws_score,
+                "stress_level": sl_level
+            },
+            "face": result_item.get("face", {}),
+            "message": result_item.get("message", "")
         }
 
         logger.info(f"Successfully processed video. HR: {response_data['vital_signs']['heart_rate']['value']}")
@@ -233,7 +508,7 @@ async def process_video(file: UploadFile = File(...)):
 
 
 @app.post("/api/health/process-video-base64")
-async def process_video_base64(data: dict):
+async def process_video_base64(background_tasks: BackgroundTasks, data: dict):
     """
     Alternative endpoint for processing base64 encoded video
     
@@ -280,31 +555,60 @@ async def process_video_base64(data: dict):
                 detail="VitalLens could not analyze the video. Ensure video contains a clear face."
             )
 
-        vital_signs = results[0].get("vitals", {})
+        result_item = results[0]
+        vital_signs = result_item.get("vitals", {})
+        heart_rate_response = _build_heart_rate_response(result_item, vital_signs)
+
+        # Persist running averages for key vital metrics after each measurement.
+        flat_metrics, ws_score, sl_level = update_average_output(result_item)
+        vitals_id = upload_vitals_to_supabase(flat_metrics, ws_score, sl_level)
+
+        # Trigger background task for health insights
+        if vitals_id and supabase:
+            vitals_data_for_llm = {
+                "heart_rate": flat_metrics.get("heart_rate"),
+                "respiratory_rate": flat_metrics.get("respiratory_rate"),
+                "hrv_sdnn": flat_metrics.get("hrv_sdnn"),
+                "hrv_rmssd": flat_metrics.get("hrv_rmssd"),
+                "hrv_lfhf": flat_metrics.get("hrv_lfhf"),
+                "wellness_score": ws_score,
+                "stress_level": sl_level
+            }
+            background_tasks.add_task(
+                generate_and_store_insights,
+                supabase,
+                ELDERLY_ID,
+                vitals_id,
+                vitals_data_for_llm
+            )
 
         response_data = {
             "success": True,
             "vital_signs": {
                 "heart_rate": {
-                    "value": vital_signs.get("heart_rate", {}).get("value"),
-                    "unit": vital_signs.get("heart_rate", {}).get("unit", "bpm"),
-                    "confidence": vital_signs.get("heart_rate", {}).get("confidence"),
-                    "note": vital_signs.get("heart_rate", {}).get("note")
+                    "value": flat_metrics.get("heart_rate"),
+                    "unit": heart_rate_response.get("unit", "bpm"),
+                    "confidence": heart_rate_response.get("confidence"),
+                    "note": heart_rate_response.get("note")
                 },
                 "respiratory_rate": {
-                    "value": vital_signs.get("respiratory_rate", {}).get("value"),
+                    "value": flat_metrics.get("respiratory_rate"),
                     "unit": vital_signs.get("respiratory_rate", {}).get("unit", "rpm"),
                     "confidence": vital_signs.get("respiratory_rate", {}).get("confidence"),
                     "note": vital_signs.get("respiratory_rate", {}).get("note")
                 },
-                "hrv_sdnn": vital_signs.get("hrv_sdnn", {}),
-                "hrv_rmssd": vital_signs.get("hrv_rmssd", {}),
-                "hrv_lfhf": vital_signs.get("hrv_lfhf", {}),
+                "hrv_sdnn": { **vital_signs.get("hrv_sdnn", {}), "value": flat_metrics.get("hrv_sdnn") } if vital_signs.get("hrv_sdnn") else vital_signs.get("hrv_sdnn", {}),
+                "hrv_rmssd": { **vital_signs.get("hrv_rmssd", {}), "value": flat_metrics.get("hrv_rmssd") } if vital_signs.get("hrv_rmssd") else vital_signs.get("hrv_rmssd", {}),
+                "hrv_lfhf": { **vital_signs.get("hrv_lfhf", {}), "value": flat_metrics.get("hrv_lfhf") } if vital_signs.get("hrv_lfhf") else vital_signs.get("hrv_lfhf", {}),
                 "ppg_waveform": vital_signs.get("ppg_waveform", {}),
                 "respiratory_waveform": vital_signs.get("respiratory_waveform", {}),
             },
-            "face": results[0].get("face", {}),
-            "message": results[0].get("message", "")
+            "summary": {
+                "wellness_score": ws_score,
+                "stress_level": sl_level
+            },
+            "face": result_item.get("face", {}),
+            "message": result_item.get("message", "")
         }
 
         return response_data

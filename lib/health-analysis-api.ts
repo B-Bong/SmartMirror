@@ -84,7 +84,10 @@ export class HealthAnalysisAPI {
     }
   }
 
-  static calculateWellnessScore(metrics: HealthMetrics): number {
+  static calculateWellnessScore(metrics: HealthMetrics, rawResponse?: HealthAnalysisResponse): number {
+    if (rawResponse?.summary?.wellness_score !== undefined) {
+      return rawResponse.summary.wellness_score
+    }
     // Simple wellness score based on vital signs
     // Scale 0-100
     const components: number[] = []
@@ -130,7 +133,10 @@ export class HealthAnalysisAPI {
       : 0
   }
 
-  static estimateStressLevel(metrics: HealthMetrics): "Low" | "Moderate" | "High" {
+  static estimateStressLevel(metrics: HealthMetrics, rawResponse?: HealthAnalysisResponse): "Low" | "Moderate" | "High" {
+    if (rawResponse?.summary?.stress_level) {
+      return rawResponse.summary.stress_level
+    }
     // Simple stress estimation based on heart rate and HRV
     if (!metrics.heartRate) return "Moderate"
 
