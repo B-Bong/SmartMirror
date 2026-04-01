@@ -12,7 +12,7 @@ import { useFallDetection } from "@/hooks/use-fall-detection"
 import { HealthAnalysisAPI } from "@/lib/health-analysis-api"
 import { HealthMetrics } from "@/lib/types"
 
-const RECORDING_DURATION = 70 // seconds
+const RECORDING_DURATION = 90 // seconds
 
 export default function SmartMirror() {
   const videoRef = useRef<HTMLVideoElement>(null)

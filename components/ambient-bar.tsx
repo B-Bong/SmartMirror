@@ -110,6 +110,7 @@ export function AmbientBar() {
       {/* ── Clock pill (right) ── */}
       <div style={{ ...pillStyle, padding: "10px 14px", textAlign: "right" }}>
         <div
+          suppressHydrationWarning
           style={{
             fontSize: "24px",
             fontWeight: 700,
@@ -122,6 +123,7 @@ export function AmbientBar() {
           {timeStr}
         </div>
         <div
+          suppressHydrationWarning
           style={{
             fontSize: "9px",
             color: "rgba(255,255,255,0.38)",
