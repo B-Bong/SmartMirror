@@ -67,8 +67,8 @@ export default function SmartMirror() {
       setHealthMetrics(metrics)
 
       // Calculate wellness score and stress level
-      const wellness = HealthAnalysisAPI.calculateWellnessScore(metrics)
-      const stress = HealthAnalysisAPI.estimateStressLevel(metrics)
+      const wellness = HealthAnalysisAPI.calculateWellnessScore(metrics, response)
+      const stress = HealthAnalysisAPI.estimateStressLevel(metrics, response)
 
       setWellnessScore(wellness)
       setStressLevel(stress)
@@ -103,7 +103,7 @@ export default function SmartMirror() {
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", frameRate: { ideal: 15 } },
+        video: { facingMode: "user", frameRate: { ideal: 15, max: 15 } },
         audio: false,
       })
       if (videoRef.current) {

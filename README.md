@@ -26,11 +26,12 @@ This Smart Mirror system automatically captures a **50-second video** of your fa
 - **Heart Rate (HR)** — beats per minute
 - **Respiratory Rate (RR)** — breaths per minute
 - **Heart Rate Variability (HRV)** — SDNN and RMSSD metrics
-- **Wellness Score** — composite health score (0–100)
+- **Wellness Score** — composite health score (0–100), calculated using backend-stabilized averaging
 - **Stress Level** — Low / Moderate / High estimation
 - **Face Confidence** — reliability of the analysis
+- **Gemini Health Insights** — AI-generated reports and caregiver suggestions (powered by Google Gemini)
 
-Additionally, the mirror displays **live Kuala Lumpur weather** (from the official Malaysia open data API) alongside the current **date and time**.
+Additionally, the mirror displays **live Kuala Lumpur weather** (from the official Malaysia open data API) alongside the current **date and time**, and syncs all measurements to a **Supabase database**.
 
 ### How rPPG Works
 
@@ -53,7 +54,9 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 ✅ **LED Strip Animation** — Animated border reacts to scanning state  
 ✅ **Multiple Vital Metrics** — Heart rate, respiratory rate, HRV (SDNN & RMSSD)  
 ✅ **Confidence Bars** — Visual indicator of measurement reliability per metric  
-✅ **Local or Cloud Processing** — Toggle between VitalLens cloud API and local CHROM algorithm  
+✅ **Google Gemini AI Insights** — Asynchronous AI analysis of vitals providing personalized care suggestions  
+✅ **Supabase Data Sync** — Automatic measurement persistence to PostgreSQL for long-term health tracking  
+✅ **Metric Synchronization** — Frontend displays smoothed sliding-window averages directly from the backend  
 ✅ **Video Compression** — FFmpeg scales to 480p, CRF 32 before upload to reduce SSL errors  
 ✅ **Error Handling** — Clear error messages and retry flow  
 
@@ -86,6 +89,10 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 │  ├─ API Client (health-analysis-api.ts)                         │
 │  └─ Hooks (use-video-recorder.ts, use-fall-detection.ts)        │
 │                                                                 │
+│  External Services:                                             │
+│  ├─ Supabase (DB persistence)                                   │
+│  └─ Google Gemini (Health Insights AI)                          │
+│                                                                 │
 │  Video Pipeline:                                                │
 │  Browser (WebM 50s) → Backend → FFmpeg 480p MP4                │
 │    → VitalLens (cloud or local) → JSON → HealthReport panel    │
@@ -102,6 +109,8 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 | **Video Processing** | FFmpeg 8.1 | Convert WebM→MP4, compress to 480p |
 | **Vital Signs (Cloud)** | VitalLens SDK 0.6.1 | rPPG via cloud API (api.rouast.com) |
 | **Vital Signs (Local)** | VitalLens SDK (CHROM method) | rPPG fully offline, no quota limits |
+| **AI Insights** | Google Gemini AI (`google-genai`) | Health analysis and caregiver suggestions |
+| **Database** | Supabase (PostgreSQL) | Long-term data storage and mobile app sync |
 | **Weather** | api.data.gov.my | Official Malaysia open data (no API key needed) |
 | **Styling** | Tailwind CSS, Custom CSS | Glassmorphism UI |
 
@@ -121,6 +130,8 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 - **VitalLens API Key** — Get from https://www.rouast.com/api  
   - Free tier: ~5–10 requests/day  
   - **Optional if using local mode** (`VITALLENS_LOCAL=true` in `.env`)
+- **Google Gemini API Key** — Get from Google AI Studio (https://aistudio.google.com/)
+- **Supabase URL & Service Role Key** — For database synchronization
 
 ### Verify Prerequisites
 
@@ -176,6 +187,15 @@ FFMPEG_BIN=C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essent
 PORT=8000
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+
+# ── Supabase ───────────────────────────────────
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+ELDERLY_ID=your-elderly-uuid
+
+# ── Google Gemini AI ───────────────────────────
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-flash-latest
 ```
 
 > **Tip:** If you hit SSL/quota errors with the cloud API, set `VITALLENS_LOCAL=true` to process fully offline with no upload.
@@ -305,15 +325,26 @@ If VITALLENS_LOCAL=true:
 Both return:
   { heart_rate, respiratory_rate, hrv_sdnn, hrv_rmssd, ppg_waveform, face_confidence }
 
-5. RESPONSE → FRONTEND
-──────────────────────
-Backend returns JSON → HealthAnalysisAPI.parseResponse()
-  → calculateWellnessScore() → 0–100 composite
-  → estimateStressLevel() → "Low" / "Moderate" / "High"
-  → setHealthMetrics() + setShowReport(true)
-  → HealthReport panel slides up
+5. DATABASE SYNC (Backend → Supabase)
+──────────────────────────────────────
+After analysis, smoothed averages (sliding window) are calculated
+  → vitals table (heart_rate, rr, hrv, wellness_score, stress_level)
+  → updates elderly profile record
 
-6. WEATHER (Frontend — AmbientBar)
+6. AI INSIGHTS (Backend → Gemini → Supabase)
+─────────────────────────────────────────────
+Asynchronous Background Task:
+  → Backend passes vitals to Google Gemini AI
+  → Gemini produces insights + caregiver suggestions
+  → Results written to health_insights table
+
+7. RESPONSE → FRONTEND
+──────────────────────
+Backend returns JSON containing both raw and smoothed summary metrics
+  → Frontend Sync: HealthAnalysisAPI uses backend-provided summary
+  → HealthReport panel slides up with accurate database-matched measurements
+
+8. WEATHER (Frontend — AmbientBar)
 ────────────────────────────────────
 useWeather hook calls:
   GET https://api.data.gov.my/weather/forecast
@@ -322,7 +353,7 @@ useWeather hook calls:
   → Maps Malay forecast string → English label + Lucide icon
   → Displays in top-left pill; refreshed every 30 minutes
 
-7. FALL DETECTION (Parallel Background Process)
+9. FALL DETECTION (Parallel Background Process)
 ─────────────────────────────────────────────
 run_in_executor(YOLOv11m-pose) loop in backend:
   → Browser captures 320x240 JPEG at 5 fps
@@ -338,11 +369,13 @@ run_in_executor(YOLOv11m-pose) loop in backend:
 ```
 HR_normalized = max(0, 100 − abs(heartRate − 75) / 0.5)
 RR_normalized = max(0, 100 − abs(respiratoryRate − 16) / 0.25)
-confidence_weight = (heartRateConfidence + respiratoryRateConfidence) / 2
+HRV_normalized = min(100, max(0, (hrv_sdnn − 15) * 2.5))
+measurement_confidence = 0.85 (averaged from sensors)
 
-wellness_score = HR_normalized * 0.4
-              + RR_normalized * 0.4
-              + confidence_weight * 100 * 0.2
+wellness_score = HR_normalized * 0.3
+              + RR_normalized * 0.3
+              + HRV_normalized * 0.25
+              + measurement_confidence * 100 * 0.15
 ```
 
 ---
@@ -393,12 +426,13 @@ Body: { file: <video_blob> }   Supported: .webm, .mp4, .mov, .avi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VITALLENS_API_KEY` | *(required for cloud)* | API key from rouast.com/api |
-| `VITALLENS_LOCAL` | `false` | `true` = use offline CHROM algorithm; `false` = cloud API |
-| `FFMPEG_BIN` | *(required)* | Full path to folder containing `ffmpeg.exe` / `ffprobe.exe` |
 | `PORT` | `8000` | Backend server port |
 | `ENVIRONMENT` | `development` | `development` or `production` |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of allowed frontend origins |
+| `SUPABASE_URL` | *(required)* | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | *(required)* | Your Supabase service role key |
+| `GEMINI_API_KEY` | *(required)* | API key from Google AI Studio |
+| `GEMINI_MODEL` | `gemini-flash-latest` | Model to use for health insights |
 
 ### Switching to Local (Offline) Mode
 
@@ -519,7 +553,14 @@ Already fixed in `hooks/use-weather.ts` — the hook uses `toLocaleDateString("e
 
 ## Changelog
 
-### v1.3.0 — March 2026 (Current)
+### v1.4.0 — March 2026 (Current)
+- ✅ **Google Gemini AI Integration** — Automated health insights and caregiver suggestions using `google-genai`.
+- ✅ **Supabase Measurement Sync** — Vitals are automatically persisted to cloud database after each scan.
+- ✅ **Frontend Metric Sync** — UI now mirrors the smoothed sliding-window averages calculated on the backend.
+- ✅ **Python SDK Migration** — Upgraded to the new `google-genai` client (deprecated `generativeai` removed).
+- ✅ **Automated .gitignore** — Added protection against tracking `.env` and `vitals_average_*.json` log dumps.
+
+### v1.3.0 — March 2026
 - ✅ **Real-Time Fall Detection** — YOLOv11m-pose integration via FastAPI WebSockets processing at 5fps natively.
 - ✅ **Fall Alert Overlay** — Premium glassmorphic "FALL ALERT" UI with manual dismiss.
 - ✅ **Monitoring Badge** — Green pulsing indicator when fall monitoring is active.
@@ -543,5 +584,5 @@ Already fixed in `hooks/use-weather.ts` — the hook uses `toLocaleDateString("e
 
 ---
 
-**Last Updated:** March 29, 2026  
+**Last Updated:** March 31, 2026  
 **Status:** ✅ Fully Functional

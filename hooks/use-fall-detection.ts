@@ -2,7 +2,7 @@
  * useFallDetection — React hook for real-time fall detection via WebSocket.
  *
  * When isActive=true (camera on), opens a WebSocket to the Python backend,
- * captures frames from the <video> element at 5 fps via an off-screen canvas,
+ * captures frames from the <video> element at 15 fps via an off-screen canvas,
  * sends them as JPEG ArrayBuffers, and parses the JSON results.
  *
  * Uses a "one frame in-flight" strategy: the next frame is only captured
@@ -46,8 +46,10 @@ export interface UseFallDetectionReturn {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const WS_URL = "ws://localhost:8000/ws/fall-detection"
-/** Frame capture interval in ms. 200ms = 5 fps — sufficient for fall detection */
-const FRAME_INTERVAL_MS = 200
+/** Target frame rate for camera frame capture and backend inference */
+const TARGET_FPS = 15
+/** Frame capture interval in ms. 67ms is approximately 15 fps. */
+const FRAME_INTERVAL_MS = Math.round(1000 / TARGET_FPS)
 /** Downsampled resolution sent to backend. Smaller = faster inference */
 const CAPTURE_WIDTH = 320
 const CAPTURE_HEIGHT = 240
@@ -58,16 +60,16 @@ export function useFallDetection(
   videoRef: React.RefObject<HTMLVideoElement | null>,
   isActive: boolean
 ): UseFallDetectionReturn {
-  const wsRef         = useRef<WebSocket | null>(null)
-  const canvasRef     = useRef<HTMLCanvasElement | null>(null)
-  const intervalRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   /** Prevents queuing multiple frames before the server responds */
   const processingRef = useRef(false)
 
-  const [fallDetected,       setFallDetected]       = useState(false)
+  const [fallDetected, setFallDetected] = useState(false)
   const [globalFallDetected, setGlobalFallDetected] = useState(false)
-  const [peopleCount,        setPeopleCount]        = useState(0)
-  const [isConnected,        setIsConnected]        = useState(false)
+  const [peopleCount, setPeopleCount] = useState(0)
+  const [isConnected, setIsConnected] = useState(false)
 
   // ── Frame capture ──────────────────────────────────────────────────
   const captureAndSendFrame = useCallback(() => {
@@ -75,7 +77,7 @@ export function useFallDetection(
     if (processingRef.current) return
 
     const video = videoRef.current
-    const ws    = wsRef.current
+    const ws = wsRef.current
     if (!video || !ws || ws.readyState !== WebSocket.OPEN) return
     // Wait until the video has enough data
     if (video.readyState < 2) return
@@ -85,7 +87,7 @@ export function useFallDetection(
       canvasRef.current = document.createElement("canvas")
     }
     const canvas = canvasRef.current
-    canvas.width  = CAPTURE_WIDTH
+    canvas.width = CAPTURE_WIDTH
     canvas.height = CAPTURE_HEIGHT
 
     const ctx = canvas.getContext("2d")
@@ -140,7 +142,7 @@ export function useFallDetection(
     ws.onopen = () => {
       console.log("[FallDetection] WebSocket connected")
       setIsConnected(true)
-      // Start frame capture loop at 5 fps
+      // Start frame capture loop at target fps
       intervalRef.current = setInterval(captureAndSendFrame, FRAME_INTERVAL_MS)
     }
 

@@ -84,53 +84,49 @@ export class HealthAnalysisAPI {
     }
   }
 
-  static calculateWellnessScore(metrics: HealthMetrics): number {
-    // Simple wellness score based on vital signs
-    // Scale 0-100
+  static calculateWellnessScore(metrics: HealthMetrics, rawResponse?: HealthAnalysisResponse): number {
+    if (rawResponse?.summary?.wellness_score !== undefined) {
+      return rawResponse.summary.wellness_score
+    }
+    // Simple wellness score based on vital signs (30% HR, 30% RR, 25% HRV, 15% Confidence)
     const components: number[] = []
 
-    // Heart rate score (60-100 bpm is ideal)
+    // Heart rate score (Target 75 bpm)
     if (metrics.heartRate) {
-      const hrScore = Math.max(
-        0,
-        Math.min(100, 100 - Math.abs(metrics.heartRate - 80) / 0.4)
-      )
-      if (metrics.heartRateConfidence && metrics.heartRateConfidence > 0.7) {
-        components.push(hrScore)
-      }
-    }
+      const hrScore = Math.max(0, 100 - Math.abs(metrics.heartRate - 75) / 0.5)
+      components.push(hrScore * 0.3)
+    } else components.push(0)
 
-    // Respiratory rate score (12-20 rpm is ideal)
+    // Respiratory rate score (Target 16 rpm)
     if (metrics.respiratoryRate) {
-      const rrScore = Math.max(
-        0,
-        Math.min(100, 100 - Math.abs(metrics.respiratoryRate - 16) / 0.4)
-      )
-      if (
-        metrics.respiratoryRateConfidence &&
-        metrics.respiratoryRateConfidence > 0.7
-      ) {
-        components.push(rrScore)
-      }
-    }
+      const rrScore = Math.max(0, 100 - Math.abs(metrics.respiratoryRate - 16) / 0.25)
+      components.push(rrScore * 0.3)
+    } else components.push(0)
 
-    // Confidence score
+    // HRV (SDNN) score (Target 55ms+)
+    if (metrics.hrvSdnn) {
+      const hrvScore = Math.min(100, Math.max(0, (metrics.hrvSdnn - 15) * 2.5))
+      components.push(hrvScore * 0.25)
+    } else components.push(40 * 0.25) // penalty fallback for no HRV
+
+    // Confidence component
     const avgConfidence = (
       [
         metrics.heartRateConfidence,
         metrics.respiratoryRateConfidence,
         metrics.faceConfidence,
-      ].filter((c) => c !== null && c !== undefined) as number[]
+      ].filter((c) => c !== null) as number[]
     ).reduce((a, b) => a + b, 0) / 3
-    components.push(avgConfidence * 100)
+    
+    components.push((avgConfidence || 0.8) * 15)
 
-    // Return average score
-    return components.length > 0
-      ? Math.round(components.reduce((a, b) => a + b, 0) / components.length)
-      : 0
+    return Math.round(components.reduce((a, b) => a + b, 0))
   }
 
-  static estimateStressLevel(metrics: HealthMetrics): "Low" | "Moderate" | "High" {
+  static estimateStressLevel(metrics: HealthMetrics, rawResponse?: HealthAnalysisResponse): "Low" | "Moderate" | "High" {
+    if (rawResponse?.summary?.stress_level) {
+      return rawResponse.summary.stress_level
+    }
     // Simple stress estimation based on heart rate and HRV
     if (!metrics.heartRate) return "Moderate"
 
