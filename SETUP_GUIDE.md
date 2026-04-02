@@ -23,7 +23,7 @@ Frontend
 
 ### Prerequisites
 
-- Python **3.12** (not 3.13+)
+- Python **3.10 to 3.12** (Python 3.13+ requires an `imghdr` polyfill)
 - Node.js **18+**
 - FFmpeg **8.1** (`ffmpeg.exe` accessible)
 - VitalLens API key from https://www.rouast.com/api *(not needed in local mode)*
@@ -62,6 +62,13 @@ FFMPEG_BIN=C:\Users\User\Downloads\ffmpeg-8.1-essentials_build\ffmpeg-8.1-essent
 PORT=8000
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+
+# ── Supabase & Gemini AI ───────────────────────────────────────
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+ELDERLY_ID=your-elderly-uuid
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-flash-latest
 ```
 
 > **Having SSL / quota errors?** Set `VITALLENS_LOCAL=true` — fully offline, no upload needed.
@@ -158,6 +165,9 @@ SmartMirror/
 | `FFMPEG_BIN` | *(required)* | Path to folder with `ffmpeg.exe` |
 | `PORT` | `8000` | Backend port |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated frontend origins |
+| `SUPABASE_URL` | *(required)* | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | *(required)* | Service role key for Supabase DB writes |
+| `GEMINI_API_KEY` | *(required)* | Your Google AI Studio API key |
 
 ---
 
@@ -216,4 +226,4 @@ Response:
 
 ---
 
-**Last Updated:** March 29, 2026
+**Last Updated:** April 02, 2026

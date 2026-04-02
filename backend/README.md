@@ -12,7 +12,7 @@ FastAPI backend for analyzing vital signs using the VitalLens API.
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.10 to 3.12 (Python 3.13+ requires an `imghdr` polyfill as it was removed from the standard library)
 - FFmpeg installed and in PATH
 - VitalLens API key (free tier available at https://www.rouast.com/api)
 - **YOLOv11m-pose Model**: You must place `yolo11m-pose.pt` in `backend/models/` for fall detection to start.
@@ -50,6 +50,11 @@ VITALLENS_API_KEY=your_api_key_here
 PORT=8000
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+ELDERLY_ID=your-elderly-uuid
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-flash-latest
 ```
 
 Get your API key:

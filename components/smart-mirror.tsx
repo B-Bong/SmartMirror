@@ -11,6 +11,8 @@ import { useVideoRecorder } from "@/hooks/use-video-recorder"
 import { useFallDetection } from "@/hooks/use-fall-detection"
 import { HealthAnalysisAPI } from "@/lib/health-analysis-api"
 import { HealthMetrics } from "@/lib/types"
+import { useDailyDrops } from "@/hooks/use-daily-drops"
+import { DailyDropViewer } from "@/components/daily-drop-viewer"
 
 const RECORDING_DURATION = 90 // seconds
 
@@ -42,6 +44,9 @@ export default function SmartMirror() {
   const [fallAlertActive, setFallAlertActive] = useState(false)
   const [fallAlertDetectedAt, setFallAlertDetectedAt] = useState<Date | null>(null)
   const [fallAlertIsGlobal, setFallAlertIsGlobal] = useState(false)
+
+  // Daily Drops
+  const { currentDrop, markAsViewed } = useDailyDrops()
 
   // Video recording
   const { isRecording, duration, startRecording, stopRecording, resetRecording } = useVideoRecorder({
@@ -309,6 +314,14 @@ export default function SmartMirror() {
             detectedAt={fallAlertDetectedAt}
             isGlobal={fallAlertIsGlobal}
             onDismiss={() => setFallAlertActive(false)}
+          />
+        )}
+
+        {/* ── Daily Drop Overlay ── */}
+        {currentDrop && (
+          <DailyDropViewer
+            drop={currentDrop}
+            onDismiss={markAsViewed}
           />
         )}
 

@@ -634,6 +634,40 @@ async def process_video_base64(background_tasks: BackgroundTasks, data: dict):
             os.unlink(tmp_path)
 
 
+@app.get("/api/drops/unread")
+async def get_unread_drops():
+    """Fetch the oldest unread daily drop to display on the mirror."""
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    try:
+        # Get oldest unread to maintain queue order
+        response = supabase.table("daily_drops").select("*").eq("elderly_id", ELDERLY_ID).eq("is_viewed", False).order("created_at", desc=False).limit(1).execute()
+        
+        if not response.data:
+            return {"has_drop": False}
+        
+        return {
+            "has_drop": True,
+            "drop": response.data[0]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching drops: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/drops/{drop_id}/mark-viewed")
+async def mark_drop_viewed(drop_id: str):
+    """Mark a daily drop as viewed."""
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    try:
+        supabase.table("daily_drops").update({"is_viewed": True}).eq("id", drop_id).execute()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Error marking drop viewed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler"""

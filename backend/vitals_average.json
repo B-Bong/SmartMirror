@@ -1,0 +1,40 @@
+{
+    "updated_at": "2026-04-01T23:57:18.315577",
+    "metrics": {
+        "heart_rate": {
+            "label": "Heart Rate",
+            "unit": "bpm",
+            "latest": 41.89797592163086,
+            "average": 41.898,
+            "count": 1
+        },
+        "respiratory_rate": {
+            "label": "Respiratory Rate",
+            "unit": "rpm",
+            "latest": 19.95586585998535,
+            "average": 19.9559,
+            "count": 1
+        },
+        "hrv_sdnn": {
+            "label": "HRV (SDNN)",
+            "unit": "ms",
+            "latest": null,
+            "average": null,
+            "count": 0
+        },
+        "hrv_rmssd": {
+            "label": "HRV (RMSSD)",
+            "unit": "ms",
+            "latest": null,
+            "average": null,
+            "count": 0
+        },
+        "hrv_lfhf": {
+            "label": "HRV (LF/HF)",
+            "unit": "ratio",
+            "latest": null,
+            "average": null,
+            "count": 0
+        }
+    }
+}

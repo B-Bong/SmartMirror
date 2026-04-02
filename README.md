@@ -121,7 +121,7 @@ Additionally, the mirror displays **live Kuala Lumpur weather** (from the offici
 ### System Requirements
 - **Windows 10/11**
 - **Node.js 18+** (for frontend)
-- **Python 3.12** (3.13+ has pydantic-core incompatibilities)
+- **Python 3.12** (Python 3.13+ requires an `imghdr` polyfill as it was removed from the standard library)
 - **FFmpeg 8.1** (must be accessible from PATH or configured via `FFMPEG_BIN`)
 - **Webcam** (for video recording)
 - **Modern browser** (Chrome or Edge recommended — best WebRTC support)
@@ -553,7 +553,11 @@ Already fixed in `hooks/use-weather.ts` — the hook uses `toLocaleDateString("e
 
 ## Changelog
 
-### v1.4.0 — March 2026 (Current)
+### v1.4.1 — April 2026 (Current)
+- ✅ **Python 3.13 Documentation** — Added notes regarding the `imghdr` standard library removal and workaround.
+- ✅ **Database Guidelines** — Consolidated cloud database (`Supabase`) and local JSON logging documentation.
+
+### v1.4.0 — March 2026
 - ✅ **Google Gemini AI Integration** — Automated health insights and caregiver suggestions using `google-genai`.
 - ✅ **Supabase Measurement Sync** — Vitals are automatically persisted to cloud database after each scan.
 - ✅ **Frontend Metric Sync** — UI now mirrors the smoothed sliding-window averages calculated on the backend.
@@ -584,5 +588,5 @@ Already fixed in `hooks/use-weather.ts` — the hook uses `toLocaleDateString("e
 
 ---
 
-**Last Updated:** March 31, 2026  
+**Last Updated:** April 02, 2026  
 **Status:** ✅ Fully Functional

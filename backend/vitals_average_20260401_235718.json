@@ -1,0 +1,14 @@
+{
+    "updated_at": "2026-04-01T23:57:18.316583",
+    "metrics": {
+        "heart_rate": 41.898,
+        "respiratory_rate": 19.9559,
+        "hrv_sdnn": null,
+        "hrv_rmssd": null,
+        "hrv_lfhf": null
+    },
+    "summary": {
+        "wellness_score": 60,
+        "stress_level": "Moderate"
+    }
+}
