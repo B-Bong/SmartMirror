@@ -3,10 +3,13 @@ import { HealthAnalysisResponse, HealthMetrics } from "@/lib/types"
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 export class HealthAnalysisAPI {
-  static async uploadVideo(videoBlob: Blob): Promise<HealthAnalysisResponse> {
+  static async uploadVideo(videoBlob: Blob, elderlyId?: string): Promise<HealthAnalysisResponse> {
     try {
       const formData = new FormData()
       formData.append("file", videoBlob, "video.webm")
+      if (elderlyId) {
+        formData.append("elderly_id", elderlyId)
+      }
 
       const response = await fetch(`${API_BASE_URL}/api/health/process-video`, {
         method: "POST",
@@ -31,7 +34,8 @@ export class HealthAnalysisAPI {
 
   static async uploadVideoBase64(
     videoBase64: string,
-    filename: string
+    filename: string,
+    elderlyId?: string
   ): Promise<HealthAnalysisResponse> {
     try {
       const response = await fetch(
@@ -44,6 +48,7 @@ export class HealthAnalysisAPI {
           body: JSON.stringify({
             video: videoBase64,
             filename: filename,
+            elderly_id: elderlyId,
           }),
         }
       )
@@ -61,6 +66,22 @@ export class HealthAnalysisAPI {
       throw new Error(
         `Failed to upload video: ${error instanceof Error ? error.message : String(error)}`
       )
+    }
+  }
+
+  static async authenticateUser(imageBlob: Blob): Promise<{ success: boolean; elderly_id?: string; first_name?: string; message?: string; error?: string }> {
+    try {
+      const formData = new FormData()
+      formData.append("file", imageBlob, "face.jpg")
+
+      const response = await fetch(`${API_BASE_URL}/api/auth/recognize`, {
+        method: "POST",
+        body: formData,
+      })
+      
+      return await response.json()
+    } catch (error) {
+      throw new Error(`Authentication failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 

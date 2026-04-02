@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Play, Square, Loader } from "lucide-react"
 import { AlignmentGuide } from "@/components/alignment-guide"
 import { LedStrip } from "@/components/led-strip"
@@ -45,8 +45,17 @@ export default function SmartMirror() {
   const [fallAlertDetectedAt, setFallAlertDetectedAt] = useState<Date | null>(null)
   const [fallAlertIsGlobal, setFallAlertIsGlobal] = useState(false)
 
+  // Authentication state
+  const [recognizedUser, setRecognizedUser] = useState<string | null>(null)
+  const [isRecognizing, setIsRecognizing] = useState(false)
+  const [authMessage, setAuthMessage] = useState<string | null>(null)
+
+  // Pre-recording countdown state
+  const [preRecordCountdown, setPreRecordCountdown] = useState<number | null>(null)
+  const preRecordTimerRef = useRef<NodeJS.Timeout | null>(null)
+
   // Daily Drops
-  const { currentDrop, markAsViewed } = useDailyDrops()
+  const { currentDrop, markAsViewed } = useDailyDrops(recognizedUser)
 
   // Video recording
   const { isRecording, duration, startRecording, stopRecording, resetRecording } = useVideoRecorder({
@@ -65,7 +74,7 @@ export default function SmartMirror() {
       setHealthMetrics((prev) => ({ ...prev, isAnalyzing: true }))
 
       // Upload video to backend
-      const response = await HealthAnalysisAPI.uploadVideo(videoBlob)
+      const response = await HealthAnalysisAPI.uploadVideo(videoBlob, recognizedUser || undefined)
 
       // Parse response and update metrics
       const metrics = HealthAnalysisAPI.parseResponse(response)
@@ -90,7 +99,7 @@ export default function SmartMirror() {
     }
   }
 
-  const handleStartRecording = async () => {
+  const handleStartRecording = useCallback(async () => {
     try {
       setError(null)
       setShowReport(false)
@@ -102,7 +111,13 @@ export default function SmartMirror() {
       const errorMessage = err instanceof Error ? err.message : String(err)
       setError(errorMessage)
     }
-  }
+  }, [resetRecording, startRecording])
+
+  // Kick off the 5-second stand-still countdown after recognition
+  const beginPreRecordCountdown = useCallback(() => {
+    if (preRecordTimerRef.current) return // already counting
+    setPreRecordCountdown(5)
+  }, [])
 
 
   const startCamera = async () => {
@@ -134,6 +149,11 @@ export default function SmartMirror() {
   }
 
   const stopCamera = () => {
+    if (preRecordTimerRef.current) {
+      clearInterval(preRecordTimerRef.current)
+      preRecordTimerRef.current = null
+    }
+    setPreRecordCountdown(null)
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
@@ -143,6 +163,9 @@ export default function SmartMirror() {
     }
     setCurrentFps(0)
     setIsActive(false)
+    setRecognizedUser(null)
+    setAuthMessage(null)
+    setIsRecognizing(false)
   }
 
   const toggleCamera = isActive ? stopCamera : startCamera
@@ -152,6 +175,65 @@ export default function SmartMirror() {
     startCamera()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Start face recognition once camera is active
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout
+
+    const attemptRecognition = async () => {
+      if (!videoRef.current) return
+      
+      setIsRecognizing(true)
+      setAuthMessage("Detecting face...")
+      
+      try {
+        const canvas = document.createElement("canvas")
+        canvas.width = videoRef.current.videoWidth
+        canvas.height = videoRef.current.videoHeight
+        const ctx = canvas.getContext("2d")
+        if (!ctx) throw new Error("Could not create canvas context")
+        
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height)
+        
+        const blob = await new Promise<Blob | null>((resolve) => 
+          canvas.toBlob(resolve, "image/jpeg", 0.9)
+        )
+        
+        if (!blob) throw new Error("Failed to capture frame")
+
+        const result = await HealthAnalysisAPI.authenticateUser(blob)
+        if (result.success && result.elderly_id) {
+          setRecognizedUser(result.elderly_id)
+          const name = result.first_name || "User"
+          setAuthMessage(`Hi ${name}! Stand still — recording in 5 seconds.`)
+          setTimeout(() => setAuthMessage(null), 5500)
+          // Start the pre-recording countdown automatically
+          beginPreRecordCountdown()
+        } else {
+          setAuthMessage(result.message || "Face not recognized. Try again.")
+          timeoutId = setTimeout(() => {
+            setIsRecognizing(false)
+          }, 3000)
+        }
+      } catch (err) {
+        setAuthMessage("Face detection failed. Trying again...")
+        timeoutId = setTimeout(() => {
+          setIsRecognizing(false)
+        }, 3000)
+      }
+    }
+
+    if (isActive && !recognizedUser && !isRecognizing) {
+      // Wait 1.5s for camera to focus/expose
+      timeoutId = setTimeout(() => {
+        attemptRecognition()
+      }, 1500)
+    }
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [isActive, recognizedUser, isRecognizing])
 
   // Trigger fall alert whenever a fall is first detected
   useEffect(() => {
@@ -163,11 +245,37 @@ export default function SmartMirror() {
     }
   }, [fallDetected, globalFallDetected])
 
+  // Pre-recording countdown tick
+  useEffect(() => {
+    if (preRecordCountdown === null) return
+
+    if (preRecordCountdown === 0) {
+      // Countdown finished — start the actual recording
+      setPreRecordCountdown(null)
+      handleStartRecording()
+      return
+    }
+
+    preRecordTimerRef.current = setTimeout(() => {
+      setPreRecordCountdown((c) => (c !== null ? c - 1 : null))
+    }, 1000)
+
+    return () => {
+      if (preRecordTimerRef.current) {
+        clearTimeout(preRecordTimerRef.current)
+        preRecordTimerRef.current = null
+      }
+    }
+  }, [preRecordCountdown, handleStartRecording])
+
   // Cleanup camera stream on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
+      }
+      if (preRecordTimerRef.current) {
+        clearTimeout(preRecordTimerRef.current)
       }
     }
   }, [])
@@ -294,6 +402,73 @@ export default function SmartMirror() {
               <Loader size={48} className="text-blue-400 animate-spin" />
               <p className="text-lg font-medium text-white">Analyzing vital signs...</p>
               <p className="text-sm text-gray-300">This may take a minute</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Authentication Status / Greeting ── */}
+        {authMessage && !healthMetrics.isAnalyzing && !isRecording && !preRecordCountdown && (
+          <div className="absolute top-24 left-1/2 -translate-x-1/2 z-40">
+            <div className={`px-6 py-3 rounded-full text-sm font-medium border flex items-center gap-3 transition-opacity ${recognizedUser ? "bg-green-500/20 border-green-500/30 text-green-200" : "bg-blue-500/20 border-blue-500/30 text-blue-200 backdrop-blur-md"}`}>
+              {!recognizedUser && <Loader size={16} className="animate-spin" />}
+              {authMessage}
+            </div>
+          </div>
+        )}
+
+        {/* ── Pre-Recording Stand-Still Countdown ── */}
+        {preRecordCountdown !== null && !isRecording && (
+          <div className="absolute inset-0 flex items-center justify-center z-40" style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)" }}>
+            <div
+              className="flex flex-col items-center justify-center gap-5 px-10 py-8 rounded-3xl"
+              style={{
+                background: "rgba(10,10,20,0.82)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                backdropFilter: "blur(32px)",
+                WebkitBackdropFilter: "blur(32px)",
+                boxShadow: "0 0 60px 0 rgba(99,102,241,0.18)",
+              }}
+            >
+              {/* Large pulsing countdown number */}
+              <div
+                className="relative flex items-center justify-center"
+                style={{ width: 120, height: 120 }}
+              >
+                <svg width="120" height="120" style={{ position: "absolute", top: 0, left: 0, transform: "rotate(-90deg)" }}>
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="6" />
+                  <circle
+                    cx="60" cy="60" r="52"
+                    fill="none"
+                    stroke="#818cf8"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeDasharray={`${2 * Math.PI * 52}`}
+                    strokeDashoffset={`${2 * Math.PI * 52 * (1 - preRecordCountdown / 5)}`}
+                    style={{ transition: "stroke-dashoffset 0.85s linear" }}
+                  />
+                </svg>
+                <span
+                  className="text-6xl font-bold"
+                  style={{
+                    color: "#c7d2fe",
+                    lineHeight: 1,
+                    textShadow: "0 0 24px rgba(129,140,248,0.7)",
+                    animation: "mirror-pulse 0.9s ease-in-out infinite",
+                  }}
+                >
+                  {preRecordCountdown}
+                </span>
+              </div>
+
+              {/* Instruction text */}
+              <div className="flex flex-col items-center gap-1">
+                <p className="text-lg font-semibold tracking-wide" style={{ color: "#e0e7ff" }}>
+                  Please stand still
+                </p>
+                <p className="text-xs tracking-widest uppercase" style={{ color: "rgba(255,255,255,0.4)" }}>
+                  Recording begins shortly
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -429,19 +604,18 @@ export default function SmartMirror() {
             )}
           </button>
 
-          {/* Recording Controls */}
-          {isActive && !isRecording && (
+          {/* Recording Controls — manual fallback only shown when recognized but no countdown active */}
+          {isActive && !isRecording && recognizedUser && preRecordCountdown === null && !healthMetrics.isAnalyzing && (
             <button
-              onClick={handleStartRecording}
-              disabled={healthMetrics.isAnalyzing}
-              className="flex items-center justify-center gap-2 px-5 py-3 rounded-full font-medium transition-all duration-300 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={beginPreRecordCountdown}
+              className="flex items-center justify-center gap-2 px-5 py-3 rounded-full font-medium transition-all duration-300 hover:scale-105 active:scale-95"
               style={{
-                background: "rgba(59, 130, 246, 0.2)",
-                border: "1px solid rgba(59, 130, 246, 0.4)",
+                background: "rgba(99, 102, 241, 0.2)",
+                border: "1px solid rgba(99, 102, 241, 0.4)",
                 backdropFilter: "blur(24px)",
                 WebkitBackdropFilter: "blur(24px)",
-                color: "#93c5fd",
-                boxShadow: "0 0 16px 0px rgba(59, 130, 246, 0.2), 0 0 0 0.5px rgba(59, 130, 246, 0.3) inset",
+                color: "#a5b4fc",
+                boxShadow: "0 0 16px 0px rgba(99, 102, 241, 0.2), 0 0 0 0.5px rgba(99, 102, 241, 0.3) inset",
               }}
             >
               <Play size={16} fill="currentColor" />

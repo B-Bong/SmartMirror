@@ -11,17 +11,17 @@ export interface DailyDrop {
   created_at: string
 }
 
-export function useDailyDrops(pollIntervalMs = 15000) {
+export function useDailyDrops(elderlyId: string | null, pollIntervalMs = 15000) {
   const [currentDrop, setCurrentDrop] = useState<DailyDrop | null>(null)
   const [isChecking, setIsChecking] = useState(false)
 
   const checkUnreadDrops = async () => {
-    if (isChecking) return
+    if (isChecking || !elderlyId) return
 
     try {
       setIsChecking(true)
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-      const res = await fetch(`${apiUrl}/api/drops/unread`)
+      const res = await fetch(`${apiUrl}/api/drops/unread?elderly_id=${elderlyId}`)
       
       if (!res.ok) {
         throw new Error("Failed to fetch drops")
@@ -55,6 +55,11 @@ export function useDailyDrops(pollIntervalMs = 15000) {
   }
 
   useEffect(() => {
+    if (!elderlyId) {
+      setCurrentDrop(null)
+      return
+    }
+
     // Initial check
     checkUnreadDrops()
     
@@ -70,7 +75,7 @@ export function useDailyDrops(pollIntervalMs = 15000) {
     }, pollIntervalMs)
     
     return () => clearInterval(interval)
-  }, [pollIntervalMs])
+  }, [pollIntervalMs, elderlyId])
 
   return {
     currentDrop,

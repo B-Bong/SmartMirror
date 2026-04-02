@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import math
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -23,6 +23,9 @@ import json
 from datetime import datetime, timezone
 from supabase import create_client, Client as SupabaseClient
 from health_insights import generate_and_store_insights
+import cv2
+import numpy as np
+from deepface import DeepFace
 
 # Load environment variables
 load_dotenv()
@@ -59,7 +62,7 @@ AVERAGE_JSON_PATH = BASE_DIR / "vitals_average.json"
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-ELDERLY_ID = os.getenv("ELDERLY_ID", "1b9418fc-a707-4da1-8a44-c30c11ac1ee8")
+DEFAULT_ELDERLY_ID = os.getenv("ELDERLY_ID", "1b9418fc-a707-4da1-8a44-c30c11ac1ee8")
 
 supabase: SupabaseClient | None = None
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
@@ -272,7 +275,7 @@ def update_average_output(result_item: dict) -> None:
     return flat_metrics, wellness_score, stress_level
 
 
-def upload_vitals_to_supabase(flat_metrics: dict, wellness_score: int, stress_level: str) -> Optional[str]:
+def upload_vitals_to_supabase(flat_metrics: dict, wellness_score: int, stress_level: str, elderly_id: str = DEFAULT_ELDERLY_ID) -> Optional[str]:
     """Insert a row into the `vitals` table and update the `elderlies` row.
 
     Silently logs on failure so it never breaks the main measurement flow.
@@ -284,7 +287,7 @@ def upload_vitals_to_supabase(flat_metrics: dict, wellness_score: int, stress_le
     now_iso = datetime.now(timezone.utc).isoformat()
 
     vitals_row = {
-        "elderly_id":       ELDERLY_ID,
+        "elderly_id":       elderly_id,
         "heart_rate":       flat_metrics.get("heart_rate"),
         "respiratory_rate": flat_metrics.get("respiratory_rate"),
         "hrv_sdnn":         flat_metrics.get("hrv_sdnn"),
@@ -381,7 +384,11 @@ async def health_check():
 
 
 @app.post("/api/health/process-video")
-async def process_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def process_video(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    elderly_id: str = Form(DEFAULT_ELDERLY_ID)
+):
     """
     Process video file and return vital signs
     
@@ -442,7 +449,7 @@ async def process_video(background_tasks: BackgroundTasks, file: UploadFile = Fi
 
         # Persist running averages for key vital metrics after each measurement.
         flat_metrics, ws_score, sl_level = update_average_output(result_item)
-        vitals_id = upload_vitals_to_supabase(flat_metrics, ws_score, sl_level)
+        vitals_id = upload_vitals_to_supabase(flat_metrics, ws_score, sl_level, elderly_id)
 
         # Trigger background task for health insights
         if vitals_id and supabase:
@@ -458,7 +465,7 @@ async def process_video(background_tasks: BackgroundTasks, file: UploadFile = Fi
             background_tasks.add_task(
                 generate_and_store_insights,
                 supabase,
-                ELDERLY_ID,
+                elderly_id,
                 vitals_id,
                 vitals_data_for_llm
             )
@@ -520,10 +527,11 @@ async def process_video_base64(background_tasks: BackgroundTasks, data: dict):
     """
     Alternative endpoint for processing base64 encoded video
     
-    Expected JSON: {"video": "base64_encoded_video", "filename": "video.mp4"}
+    Expected JSON: {"video": "base64_encoded_video", "filename": "video.mp4", "elderly_id": "optional-id"}
     """
     try:
         import base64
+        elderly_id = data.get("elderly_id", DEFAULT_ELDERLY_ID)
         
         if "video" not in data or "filename" not in data:
             raise HTTPException(
@@ -569,7 +577,7 @@ async def process_video_base64(background_tasks: BackgroundTasks, data: dict):
 
         # Persist running averages for key vital metrics after each measurement.
         flat_metrics, ws_score, sl_level = update_average_output(result_item)
-        vitals_id = upload_vitals_to_supabase(flat_metrics, ws_score, sl_level)
+        vitals_id = upload_vitals_to_supabase(flat_metrics, ws_score, sl_level, elderly_id)
 
         # Trigger background task for health insights
         if vitals_id and supabase:
@@ -585,7 +593,7 @@ async def process_video_base64(background_tasks: BackgroundTasks, data: dict):
             background_tasks.add_task(
                 generate_and_store_insights,
                 supabase,
-                ELDERLY_ID,
+                elderly_id,
                 vitals_id,
                 vitals_data_for_llm
             )
@@ -634,14 +642,155 @@ async def process_video_base64(background_tasks: BackgroundTasks, data: dict):
             os.unlink(tmp_path)
 
 
+@app.post("/api/auth/recognize")
+async def recognize_user(file: UploadFile = File(...)):
+    """
+    Receives a single image frame, extracts the face embedding, 
+    and checks Supabase to find the matching user.
+    """
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    try:
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid image file"})
+        # Extract face embeddings using DeepFace (Facenet = 128d)
+        try:
+            # DeepFace expects BGR arrays (default cv2 format)
+            results = DeepFace.represent(img_path=img, model_name="Facenet", detector_backend="mtcnn", enforce_detection=True)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"success": False, "message": "No face detected"})
+            
+        if len(results) > 1:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Multiple faces detected. Please stand alone."})
+
+        user_embedding = results[0]["embedding"]
+
+        # Query Supabase using custom pgvector function
+        response = supabase.rpc("match_elderly_face", {
+            "query_embedding": user_embedding,
+            "match_threshold": 10.0  # Facenet L2 Euclidean distance threshold is ~10.0
+        }).execute()
+        
+        matches = response.data
+        if matches and len(matches) > 0:
+            matched_user_id = matches[0]["id"]
+            
+            # Fetch the user's first name
+            try:
+                user_res = supabase.table("elderlies").select("first_name").eq("id", matched_user_id).execute()
+                first_name = user_res.data[0].get("first_name", "User") if user_res.data else "User"
+            except Exception as e:
+                logger.error(f"Failed to fetch first name: {e}")
+                first_name = "User"
+                
+            return {"success": True, "elderly_id": matched_user_id, "first_name": first_name}
+        else:
+            return {"success": False, "message": "Face not recognized. Unregistered user."}
+            
+    except Exception as e:
+        logger.error(f"Error matching face: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@app.post("/api/auth/register-face")
+async def register_face(elderly_id: str = Form(...), file: UploadFile = File(...)):
+    """
+    Register a face embedding for an elderly person.
+
+    Called by the Lumencare mobile app immediately after creating / updating a
+    dependent profile. Accepts a photo (JPEG or PNG), extracts a 128-d Facenet
+    embedding via DeepFace / MTCNN, and writes it to the `face_embedding`
+    column of the `elderlies` Supabase table so the Smart Mirror can recognise
+    this person automatically.
+
+    Form fields
+    -----------
+    elderly_id : str  — UUID of the elderlies row to update
+    file       : file — Photo of the dependent's face (JPEG / PNG, ≤ 10 MB)
+
+    Response (JSON)
+    ---------------
+    200  { "success": true,  "message": "Face registered successfully" }
+    400  { "success": false, "message": "<reason>" }
+    500  { "success": false, "error": "<detail>" }
+    """
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB guard
+
+    try:
+        logger.info(f"[register-face] Received request for elderly_id={elderly_id}, filename={file.filename}")
+
+        # ── 1. Read & validate size ──────────────────────────────────────────
+        contents = await file.read()
+        if len(contents) == 0:
+            logger.warning("[register-face] Empty file received")
+            return JSONResponse(status_code=400, content={"success": False, "message": "Empty file received. Please attach a photo."})
+
+        if len(contents) > MAX_IMAGE_BYTES:
+            logger.warning(f"[register-face] File too large: {len(contents)} bytes")
+            return JSONResponse(status_code=400, content={"success": False, "message": "Image is too large. Please use a photo under 10 MB."})
+
+        # ── 2. Decode image ──────────────────────────────────────────────────
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            logger.warning("[register-face] cv2 could not decode the image")
+            return JSONResponse(status_code=400, content={"success": False, "message": "Could not read the image. Please upload a JPEG or PNG photo."})
+
+        logger.info(f"[register-face] Image decoded: {img.shape[1]}x{img.shape[0]} px")
+
+        # ── 3. Extract face embedding ────────────────────────────────────────
+        try:
+            results = DeepFace.represent(
+                img_path=img,
+                model_name="Facenet",
+                detector_backend="mtcnn",
+                enforce_detection=True,
+            )
+        except ValueError as ve:
+            logger.warning(f"[register-face] No face detected: {ve}")
+            return JSONResponse(status_code=400, content={"success": False, "message": "No face detected in the photo. Please use a clear, well-lit photo showing the person's face."})
+
+        if len(results) > 1:
+            logger.warning(f"[register-face] Multiple faces detected ({len(results)})")
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Multiple faces detected ({len(results)}). Please use a photo with only one person."})
+
+        user_embedding = results[0]["embedding"]
+        logger.info(f"[register-face] Embedding generated ({len(user_embedding)}-d) for elderly_id={elderly_id}")
+
+        # ── 4. Persist to Supabase ───────────────────────────────────────────
+        response = supabase.table("elderlies").update({
+            "face_embedding": user_embedding
+        }).eq("id", elderly_id).execute()
+
+        if response.data:
+            logger.info(f"[register-face] ✅ Face registered for elderly_id={elderly_id}")
+            return {"success": True, "message": "Face registered successfully"}
+        else:
+            logger.error(f"[register-face] Supabase update returned no rows for elderly_id={elderly_id}")
+            return JSONResponse(status_code=400, content={"success": False, "message": "No matching record found. Please check the elderly_id."})
+
+    except Exception as e:
+        logger.error(f"[register-face] Unexpected error: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
 @app.get("/api/drops/unread")
-async def get_unread_drops():
+async def get_unread_drops(elderly_id: str = DEFAULT_ELDERLY_ID):
     """Fetch the oldest unread daily drop to display on the mirror."""
     if supabase is None:
         raise HTTPException(status_code=500, detail="Supabase not configured")
     try:
         # Get oldest unread to maintain queue order
-        response = supabase.table("daily_drops").select("*").eq("elderly_id", ELDERLY_ID).eq("is_viewed", False).order("created_at", desc=False).limit(1).execute()
+        response = supabase.table("daily_drops").select("*").eq("elderly_id", elderly_id).eq("is_viewed", False).order("created_at", desc=False).limit(1).execute()
         
         if not response.data:
             return {"has_drop": False}
