@@ -14,7 +14,7 @@ import { HealthMetrics } from "@/lib/types"
 import { useDailyDrops } from "@/hooks/use-daily-drops"
 import { DailyDropViewer } from "@/components/daily-drop-viewer"
 
-const RECORDING_DURATION = 90 // seconds
+const RECORDING_DURATION = 60 // seconds
 
 export default function SmartMirror() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -182,23 +182,23 @@ export default function SmartMirror() {
 
     const attemptRecognition = async () => {
       if (!videoRef.current) return
-      
+
       setIsRecognizing(true)
       setAuthMessage("Detecting face...")
-      
+
       try {
         const canvas = document.createElement("canvas")
         canvas.width = videoRef.current.videoWidth
         canvas.height = videoRef.current.videoHeight
         const ctx = canvas.getContext("2d")
         if (!ctx) throw new Error("Could not create canvas context")
-        
+
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height)
-        
-        const blob = await new Promise<Blob | null>((resolve) => 
+
+        const blob = await new Promise<Blob | null>((resolve) =>
           canvas.toBlob(resolve, "image/jpeg", 0.9)
         )
-        
+
         if (!blob) throw new Error("Failed to capture frame")
 
         const result = await HealthAnalysisAPI.authenticateUser(blob)

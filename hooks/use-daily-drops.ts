@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 
 export interface DailyDrop {
   id: string
@@ -13,14 +13,15 @@ export interface DailyDrop {
 
 export function useDailyDrops(elderlyId: string | null, pollIntervalMs = 15000) {
   const [currentDrop, setCurrentDrop] = useState<DailyDrop | null>(null)
-  const [isChecking, setIsChecking] = useState(false)
+  const isCheckingRef = useRef(false)
 
-  const checkUnreadDrops = async () => {
-    if (isChecking || !elderlyId) return
+  const checkUnreadDrops = useCallback(async () => {
+    if (isCheckingRef.current || !elderlyId) return
 
     try {
-      setIsChecking(true)
+      isCheckingRef.current = true
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      
       const res = await fetch(`${apiUrl}/api/drops/unread?elderly_id=${elderlyId}`)
       
       if (!res.ok) {
@@ -38,9 +39,9 @@ export function useDailyDrops(elderlyId: string | null, pollIntervalMs = 15000) 
     } catch (err) {
       console.error("[useDailyDrops] Error checking for drops:", err)
     } finally {
-      setIsChecking(false)
+      isCheckingRef.current = false
     }
-  }
+  }, [elderlyId])
 
   const markAsViewed = async (dropId: string) => {
     try {
@@ -75,7 +76,7 @@ export function useDailyDrops(elderlyId: string | null, pollIntervalMs = 15000) 
     }, pollIntervalMs)
     
     return () => clearInterval(interval)
-  }, [pollIntervalMs, elderlyId])
+  }, [pollIntervalMs, elderlyId, checkUnreadDrops])
 
   return {
     currentDrop,
