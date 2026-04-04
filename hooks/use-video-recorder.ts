@@ -39,6 +39,7 @@ export const useVideoRecorder = (options: UseVideoRecorderOptions = {}) => {
 
         const mediaRecorder = new MediaRecorder(stream, {
           mimeType: supportedType,
+          videoBitsPerSecond: 2_500_000, // 2.5 Mbps — good quality for rPPG analysis
         })
 
         mediaRecorder.ondataavailable = (event) => {

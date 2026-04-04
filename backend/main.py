@@ -315,8 +315,8 @@ def convert_webm_to_mp4(webm_path: str) -> str:
         logger.info(f"Converting {webm_path} to MP4 format at {VIDEO_FPS} fps...")
         result = subprocess.run(
             ["ffmpeg", "-i", webm_path, "-r", str(VIDEO_FPS),
-             "-vf", "scale='min(640,iw)':-2",  # cap at 640px wide, keep aspect
-             "-c:v", "libx264", "-crf", "32", "-preset", "fast",
+             "-vf", "scale='min(1280,iw)':-2",  # allow up to 720p, preserve aspect
+             "-c:v", "libx264", "-crf", "23", "-preset", "fast",
              "-c:a", "aac", "-y", mp4_path],
             capture_output=True,
             text=True,
@@ -340,10 +340,24 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware for Next.js frontend
+# Add CORS middleware
+# Expanded for development to handle various origins (Expo web, React Native simulator, etc.)
+default_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:8081",
+    "http://localhost:19006",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://127.0.0.1:8081",
+    "http://127.0.0.1:19006",
+]
+env_origins = os.getenv("CORS_ORIGINS", "").split(",")
+origins = list(set([o for o in (default_origins + env_origins) if o]))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=(os.getenv("CORS_ORIGINS", "http://localhost:3000")).split(","),
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -680,15 +694,17 @@ async def recognize_user(file: UploadFile = File(...)):
         if matches and len(matches) > 0:
             matched_user_id = matches[0]["id"]
             
-            # Fetch the user's first name
+            # Fetch the user's first and last name
             try:
-                user_res = supabase.table("elderlies").select("first_name").eq("id", matched_user_id).execute()
+                user_res = supabase.table("elderlies").select("first_name, last_name").eq("id", matched_user_id).execute()
                 first_name = user_res.data[0].get("first_name", "User") if user_res.data else "User"
+                last_name = user_res.data[0].get("last_name", "") if user_res.data else ""
             except Exception as e:
-                logger.error(f"Failed to fetch first name: {e}")
+                logger.error(f"Failed to fetch name: {e}")
                 first_name = "User"
+                last_name = ""
                 
-            return {"success": True, "elderly_id": matched_user_id, "first_name": first_name}
+            return {"success": True, "elderly_id": matched_user_id, "first_name": first_name, "last_name": last_name}
         else:
             return {"success": False, "message": "Face not recognized. Unregistered user."}
             

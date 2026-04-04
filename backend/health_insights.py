@@ -1,33 +1,49 @@
 """
-health_insights.py — LLM-powered health analysis via Google Gemini.
+health_insights.py — LLM-powered health analysis via Groq.
 
 After each vitals measurement is uploaded to Supabase, this module is called
 asynchronously to generate personalised health insights and caregiver
-suggestions.  Results are written back to the `health_insights` table.
+suggestions using Groq (Llama 3). Results are written back to the `health_insights` table.
 """
 
 import os
 import json
 import logging
 from datetime import datetime, timezone, date
+from pathlib import Path
 
-from google import genai
-from google.genai import types
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _DOTENV_PATH = Path(__file__).parent / ".env"
+    _HAS_DOTENV = True
+except ImportError:
+    _HAS_DOTENV = False
+
+from groq import Groq
 from supabase import Client as SupabaseClient
 
 logger = logging.getLogger(__name__)
 
-# ── Gemini setup ──────────────────────────────────────────────────────────────
+# ── Groq setup ────────────────────────────────────────────────────────────────
+# Client is created lazily inside generate_and_store_insights so that
+# changes to the GROQ_API_KEY in .env are picked up without restarting
+# the backend server.
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-client = None
-if GEMINI_API_KEY:
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    logger.info(f"Gemini configured with model: {GEMINI_MODEL}")
-else:
-    logger.warning("GEMINI_API_KEY not set — health insights disabled")
+
+def _get_groq_client():
+    """Return a fresh Groq client using the current env key.
+    
+    Reloads .env on every call so updating the key file takes effect
+    immediately without restarting the backend server.
+    """
+    if _HAS_DOTENV:
+        _load_dotenv(_DOTENV_PATH, override=True)
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY not set in environment")
+    return Groq(api_key=api_key)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -101,19 +117,28 @@ def _build_user_prompt(profile: dict, vitals: dict) -> str:
         "Latest vital-sign measurement:",
     ]
 
-    metric_labels = {
+    # Required raw biometric metrics — Gemini derives its own assessment
+    required_labels = {
         "heart_rate": ("Heart Rate", "bpm"),
         "respiratory_rate": ("Respiratory Rate", "rpm"),
+    }
+    # Optional metrics — omitted from prompt if not available
+    optional_labels = {
         "hrv_sdnn": ("HRV SDNN", "ms"),
         "hrv_rmssd": ("HRV RMSSD", "ms"),
-        "hrv_lfhf": ("HRV LF/HF Ratio", ""),
-        "wellness_score": ("Wellness Score", "/100"),
-        "stress_level": ("Stress Level", ""),
+        "hrv_lfhf": ("HRV LF/HF Ratio", ""),  # often absent — not required
     }
+    # wellness_score and stress_level are intentionally excluded —
+    # they are backend-derived summaries; Gemini should form its own judgment.
 
-    for key, (label, unit) in metric_labels.items():
+    for key, (label, unit) in required_labels.items():
         value = vitals.get(key)
         if value is not None:
+            lines.append(f"  • {label}: {value} {unit}".rstrip())
+
+    for key, (label, unit) in optional_labels.items():
+        value = vitals.get(key)
+        if value is not None:  # silently skip if blank/null
             lines.append(f"  • {label}: {value} {unit}".rstrip())
 
     lines.append("")
@@ -130,49 +155,46 @@ def generate_and_store_insights(
     vitals_id: str,
     vitals_data: dict,
 ) -> None:
-    """Call Gemini to analyse vitals and store the result in health_insights.
+    """Call Groq to analyse vitals and store the result in health_insights.
 
     This runs in a background thread so it never blocks the main request.
     """
-    if not GEMINI_API_KEY:
-        logger.warning("Gemini API key not set — skipping health insights")
+    api_key = os.getenv("GROQ_API_KEY", "")
+    model = os.getenv("GROQ_MODEL", GROQ_MODEL)
+
+    if not api_key:
+        logger.warning("GROQ_API_KEY not set — skipping health insights")
         return
 
     # 1. Fetch elderly profile
     profile = _fetch_elderly_profile(sb, elderly_id)
-    logger.info(f"Generating health insights for {profile['name']} (vitals_id={vitals_id})")
+    logger.info(f"Generating health insights for {profile['name']} (vitals_id={vitals_id}, model={model})")
 
     # 2. Build prompt
     user_prompt = _build_user_prompt(profile, vitals_data)
 
-    # 3. Call Gemini
+    # 3. Call Groq
     try:
-        if not client:
-            raise ValueError("Gemini client not initialized")
-            
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-            )
+        groq_client = _get_groq_client()
+
+        response = groq_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"}
         )
 
         # Extract JSON from response
-        raw_text = response.text.strip()
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[1]  # remove first line
-            raw_text = raw_text.rsplit("```", 1)[0]  # remove last fence
-            raw_text = raw_text.strip()
+        raw_text = response.choices[0].message.content.strip()
 
         parsed = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        logger.error(f"Gemini returned invalid JSON: {exc}\nRaw: {raw_text[:500]}")
+        logger.error(f"Groq returned invalid JSON: {exc}\nRaw: {raw_text[:500]}")
         return
     except Exception as exc:
-        logger.error(f"Gemini API call failed: {exc}", exc_info=True)
+        logger.error(f"Groq API call failed: {exc}", exc_info=True)
         return
 
     insights = parsed.get("insights", "")

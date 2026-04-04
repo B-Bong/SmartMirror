@@ -32,11 +32,11 @@ class FallDetector:
       - Global alert fires for 30 frames when a person exits frame with vel_x > 15
     """
 
-    def __init__(self, model: YOLO, inference_size: int = 500) -> None:
+    def __init__(self, model: YOLO, inference_size: int = 640) -> None:
         """
         Args:
             model:          Pre-loaded YOLO pose model (shared across instances).
-            inference_size: Image resolution fed to YOLO (lower = faster).
+            inference_size: Image resolution fed to YOLO (must be multiple of 32).
         """
         self.model = model
         self.inference_size = inference_size

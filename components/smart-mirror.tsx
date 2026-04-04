@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { Play, Square, Loader } from "lucide-react"
+import { Play, Square, Loader, ScanFace } from "lucide-react"
 import { AlignmentGuide } from "@/components/alignment-guide"
 import { LedStrip } from "@/components/led-strip"
 import { AmbientBar } from "@/components/ambient-bar"
@@ -47,12 +47,19 @@ export default function SmartMirror() {
 
   // Authentication state
   const [recognizedUser, setRecognizedUser] = useState<string | null>(null)
-  const [isRecognizing, setIsRecognizing] = useState(false)
-  const [authMessage, setAuthMessage] = useState<string | null>(null)
+  const [recognizedLastName, setRecognizedLastName] = useState<string | null>(null)
+  const [isGuestUser, setIsGuestUser] = useState(false)
+
+  // Mirror flow state machine:
+  //   idle → scanning (10 s face scan) → welcoming (greeting shown) → countdown (5 s) → recording
+  const [mirrorPhase, setMirrorPhase] = useState<"idle" | "scanning" | "welcoming" | "countdown" | "recording" | "done">("idle")
+  const [scanSecondsLeft, setScanSecondsLeft] = useState(10)
 
   // Pre-recording countdown state
   const [preRecordCountdown, setPreRecordCountdown] = useState<number | null>(null)
   const preRecordTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const scanTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const recognitionAttemptRef = useRef<boolean>(false)
 
   // Daily Drops
   const { currentDrop, markAsViewed } = useDailyDrops(recognizedUser)
@@ -96,8 +103,21 @@ export default function SmartMirror() {
     } finally {
       setHealthMetrics((prev) => ({ ...prev, isAnalyzing: false }))
       resetRecording()
+      // Phase transitions to "done" — user dismisses the report manually
+      setMirrorPhase("done")
     }
   }
+
+  // Called when user closes the health report — return to idle ready state
+  const handleDismissReport = useCallback(() => {
+    setShowReport(false)
+    setRecognizedUser(null)
+    setRecognizedLastName(null)
+    setIsGuestUser(false)
+    setMirrorPhase("idle")
+    setScanSecondsLeft(10)
+    recognitionAttemptRef.current = false
+  }, [])
 
   const handleStartRecording = useCallback(async () => {
     try {
@@ -105,25 +125,40 @@ export default function SmartMirror() {
       setShowReport(false)
       if (streamRef.current) {
         resetRecording()
+        setMirrorPhase("recording")
         await startRecording(streamRef.current)
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       setError(errorMessage)
+      setMirrorPhase("idle")
     }
   }, [resetRecording, startRecording])
 
-  // Kick off the 5-second stand-still countdown after recognition
+  // Kick off the 5-second stand-still countdown after welcoming phase
   const beginPreRecordCountdown = useCallback(() => {
     if (preRecordTimerRef.current) return // already counting
+    setMirrorPhase("countdown")
     setPreRecordCountdown(5)
+  }, [])
+
+  // Begin the 10-second face-scan phase
+  const beginScanPhase = useCallback(() => {
+    setMirrorPhase("scanning")
+    setScanSecondsLeft(10)
+    recognitionAttemptRef.current = false
   }, [])
 
 
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", frameRate: { ideal: 15, max: 15 } },
+        video: {
+          facingMode: "user",
+          frameRate: { ideal: 15, max: 15 },
+          width:  { ideal: 1280, min: 640 },  // request 720p, accept >=480p
+          height: { ideal: 720,  min: 480 },
+        },
         audio: false,
       })
       if (videoRef.current) {
@@ -153,6 +188,10 @@ export default function SmartMirror() {
       clearInterval(preRecordTimerRef.current)
       preRecordTimerRef.current = null
     }
+    if (scanTimerRef.current) {
+      clearInterval(scanTimerRef.current)
+      scanTimerRef.current = null
+    }
     setPreRecordCountdown(null)
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop())
@@ -164,8 +203,11 @@ export default function SmartMirror() {
     setCurrentFps(0)
     setIsActive(false)
     setRecognizedUser(null)
-    setAuthMessage(null)
-    setIsRecognizing(false)
+    setRecognizedLastName(null)
+    setIsGuestUser(false)
+    setMirrorPhase("idle")
+    setScanSecondsLeft(10)
+    recognitionAttemptRef.current = false
   }
 
   const toggleCamera = isActive ? stopCamera : startCamera
@@ -176,64 +218,84 @@ export default function SmartMirror() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Start face recognition once camera is active
+  // ── 10-second face-scan phase ────────────────────────────────────────────
+  // Scanning begins ONLY when beginScanPhase() is called (user presses button).
+  // No auto-trigger; the idle state shows the "Start Session" button.
+
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout
+    if (mirrorPhase !== "scanning") return
+
+    // Countdown tick
+    if (scanSecondsLeft <= 0) {
+      // Time is up — treat as guest
+      if (scanTimerRef.current) {
+        clearInterval(scanTimerRef.current)
+        scanTimerRef.current = null
+      }
+      setIsGuestUser(true)
+      setMirrorPhase("welcoming")
+      return
+    }
+
+    const tick = setTimeout(() => setScanSecondsLeft((s) => s - 1), 1000)
+    return () => clearTimeout(tick)
+  }, [mirrorPhase, scanSecondsLeft])
+
+  // Attempt recognition repeatedly while scanning
+  useEffect(() => {
+    if (mirrorPhase !== "scanning") return
+    if (recognitionAttemptRef.current) return // already running an attempt
 
     const attemptRecognition = async () => {
-      if (!videoRef.current) return
-
-      setIsRecognizing(true)
-      setAuthMessage("Detecting face...")
+      if (!videoRef.current || mirrorPhase !== "scanning") return
+      recognitionAttemptRef.current = true
 
       try {
         const canvas = document.createElement("canvas")
         canvas.width = videoRef.current.videoWidth
         canvas.height = videoRef.current.videoHeight
         const ctx = canvas.getContext("2d")
-        if (!ctx) throw new Error("Could not create canvas context")
+        if (!ctx) return
 
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height)
-
         const blob = await new Promise<Blob | null>((resolve) =>
           canvas.toBlob(resolve, "image/jpeg", 0.9)
         )
-
-        if (!blob) throw new Error("Failed to capture frame")
+        if (!blob) return
 
         const result = await HealthAnalysisAPI.authenticateUser(blob)
         if (result.success && result.elderly_id) {
+          // Recognised — transition to welcoming phase
           setRecognizedUser(result.elderly_id)
-          const name = result.first_name || "User"
-          setAuthMessage(`Hi ${name}! Stand still — recording in 5 seconds.`)
-          setTimeout(() => setAuthMessage(null), 5500)
-          // Start the pre-recording countdown automatically
-          beginPreRecordCountdown()
-        } else {
-          setAuthMessage(result.message || "Face not recognized. Try again.")
-          timeoutId = setTimeout(() => {
-            setIsRecognizing(false)
-          }, 3000)
+          setRecognizedLastName(result.last_name || null)
+          setIsGuestUser(false)
+          setMirrorPhase("welcoming")
+          return
         }
-      } catch (err) {
-        setAuthMessage("Face detection failed. Trying again...")
-        timeoutId = setTimeout(() => {
-          setIsRecognizing(false)
-        }, 3000)
+      } catch {
+        // Silently retry on error
+      } finally {
+        recognitionAttemptRef.current = false
+      }
+
+      // Not recognised yet — wait 2 s then retry
+      if (mirrorPhase === "scanning") {
+        setTimeout(() => {
+          recognitionAttemptRef.current = false
+        }, 2000)
       }
     }
 
-    if (isActive && !recognizedUser && !isRecognizing) {
-      // Wait 1.5s for camera to focus/expose
-      timeoutId = setTimeout(() => {
-        attemptRecognition()
-      }, 1500)
-    }
+    attemptRecognition()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mirrorPhase, scanSecondsLeft])
 
-    return () => {
-      if (timeoutId) clearTimeout(timeoutId)
-    }
-  }, [isActive, recognizedUser, isRecognizing])
+  // ── Welcoming phase: show greeting for 3 s, then start countdown ─────────
+  useEffect(() => {
+    if (mirrorPhase !== "welcoming") return
+    const welcomeTimer = setTimeout(() => beginPreRecordCountdown(), 3000)
+    return () => clearTimeout(welcomeTimer)
+  }, [mirrorPhase, beginPreRecordCountdown])
 
   // Trigger fall alert whenever a fall is first detected
   useEffect(() => {
@@ -276,6 +338,9 @@ export default function SmartMirror() {
       }
       if (preRecordTimerRef.current) {
         clearTimeout(preRecordTimerRef.current)
+      }
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current)
       }
     }
   }, [])
@@ -406,18 +471,114 @@ export default function SmartMirror() {
           </div>
         )}
 
-        {/* ── Authentication Status / Greeting ── */}
-        {authMessage && !healthMetrics.isAnalyzing && !isRecording && !preRecordCountdown && (
+        {/* ── Scanning Phase Overlay ── */}
+        {mirrorPhase === "scanning" && !isRecording && (
           <div className="absolute top-24 left-1/2 -translate-x-1/2 z-40">
-            <div className={`px-6 py-3 rounded-full text-sm font-medium border flex items-center gap-3 transition-opacity ${recognizedUser ? "bg-green-500/20 border-green-500/30 text-green-200" : "bg-blue-500/20 border-blue-500/30 text-blue-200 backdrop-blur-md"}`}>
-              {!recognizedUser && <Loader size={16} className="animate-spin" />}
-              {authMessage}
+            <div
+              className="flex flex-col items-center gap-3 px-7 py-4 rounded-2xl"
+              style={{
+                background: "rgba(0,0,0,0.6)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                backdropFilter: "blur(20px)",
+                WebkitBackdropFilter: "blur(20px)",
+              }}
+            >
+              {/* Animated scanning rings */}
+              <div className="relative flex items-center justify-center" style={{ width: 56, height: 56 }}>
+                <svg width="56" height="56" style={{ position: "absolute", top: 0, left: 0, transform: "rotate(-90deg)" }}>
+                  <circle cx="28" cy="28" r="23" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+                  <circle
+                    cx="28" cy="28" r="23"
+                    fill="none"
+                    stroke="#60a5fa"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeDasharray={`${2 * Math.PI * 23}`}
+                    strokeDashoffset={`${2 * Math.PI * 23 * (1 - scanSecondsLeft / 10)}`}
+                    style={{ transition: "stroke-dashoffset 0.9s linear" }}
+                  />
+                </svg>
+                <span className="text-xl font-bold" style={{ color: "#93c5fd", lineHeight: 1 }}>
+                  {scanSecondsLeft}
+                </span>
+              </div>
+              <div className="flex flex-col items-center gap-0.5">
+                <p className="text-sm font-semibold tracking-wide" style={{ color: "#bfdbfe" }}>
+                  Scanning face...
+                </p>
+                <p className="text-xs tracking-widest uppercase" style={{ color: "rgba(255,255,255,0.38)" }}>
+                  Please look at the mirror
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Welcoming Phase Overlay ── */}
+        {mirrorPhase === "welcoming" && !isRecording && (
+          <div
+            className="absolute inset-0 flex items-center justify-center z-40"
+            style={{ background: "rgba(0,0,0,0.50)", backdropFilter: "blur(4px)" }}
+          >
+            <div
+              className="flex flex-col items-center gap-4 px-12 py-10 rounded-3xl"
+              style={{
+                background: isGuestUser
+                  ? "rgba(15,15,30,0.88)"
+                  : "rgba(10,20,15,0.88)",
+                border: isGuestUser
+                  ? "1px solid rgba(148,163,184,0.2)"
+                  : "1px solid rgba(52,211,153,0.25)",
+                backdropFilter: "blur(32px)",
+                WebkitBackdropFilter: "blur(32px)",
+                boxShadow: isGuestUser
+                  ? "0 0 60px 0 rgba(148,163,184,0.12)"
+                  : "0 0 60px 0 rgba(52,211,153,0.18)",
+              }}
+            >
+              {/* Wave emoji */}
+              <span style={{ fontSize: 52 }}>👋</span>
+
+              {/* Greeting */}
+              <div className="flex flex-col items-center gap-1 text-center">
+                <p
+                  className="text-3xl font-bold tracking-tight"
+                  style={{
+                    color: isGuestUser ? "#e2e8f0" : "#6ee7b7",
+                    textShadow: isGuestUser
+                      ? "0 0 20px rgba(226,232,240,0.3)"
+                      : "0 0 20px rgba(110,231,183,0.45)",
+                  }}
+                >
+                  {isGuestUser
+                    ? "Welcome, Guest!"
+                    : `Welcome, ${recognizedLastName || "User"}!`}
+                </p>
+                <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.45)" }}>
+                  {isGuestUser
+                    ? "Measurement will start shortly."
+                    : "Great to see you again!"}
+                </p>
+              </div>
+
+              {/* Measurement starting notice */}
+              <div
+                className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium tracking-wide"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "rgba(255,255,255,0.55)",
+                }}
+              >
+                <Loader size={12} className="animate-spin" />
+                Measurement starting in a moment...
+              </div>
             </div>
           </div>
         )}
 
         {/* ── Pre-Recording Stand-Still Countdown ── */}
-        {preRecordCountdown !== null && !isRecording && (
+        {preRecordCountdown !== null && mirrorPhase === "countdown" && !isRecording && (
           <div className="absolute inset-0 flex items-center justify-center z-40" style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)" }}>
             <div
               className="flex flex-col items-center justify-center gap-5 px-10 py-8 rounded-3xl"
@@ -479,7 +640,7 @@ export default function SmartMirror() {
             metrics={healthMetrics}
             wellnessScore={wellnessScore}
             stressLevel={stressLevel}
-            onDismiss={() => setShowReport(false)}
+            onDismiss={handleDismissReport}
           />
         )}
 
@@ -571,58 +732,63 @@ export default function SmartMirror() {
 
         {/* ── Center Bottom: Control Buttons ── */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4">
-          {/* Camera Toggle */}
-          <button
-            onClick={toggleCamera}
-            disabled={isRecording || healthMetrics.isAnalyzing}
-            className="flex items-center justify-center gap-2 px-5 py-3 rounded-full font-medium transition-all duration-300 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              background: isActive
-                ? "rgba(239, 68, 68, 0.2)"
-                : "rgba(34, 197, 94, 0.2)",
-              border: isActive
-                ? "1px solid rgba(239, 68, 68, 0.4)"
-                : "1px solid rgba(34, 197, 94, 0.4)",
-              backdropFilter: "blur(24px)",
-              WebkitBackdropFilter: "blur(24px)",
-              color: isActive ? "#fca5a5" : "#86efac",
-              boxShadow: isActive
-                ? "0 0 16px 0px rgba(239, 68, 68, 0.2), 0 0 0 0.5px rgba(239, 68, 68, 0.3) inset"
-                : "0 0 16px 0px rgba(34, 197, 94, 0.2), 0 0 0 0.5px rgba(34, 197, 94, 0.3) inset",
-            }}
-          >
-            {isActive ? (
-              <>
-                <Square size={16} fill="currentColor" />
-                <span>Stop Camera</span>
-              </>
-            ) : (
-              <>
-                <Play size={16} fill="currentColor" />
-                <span>Start Camera</span>
-              </>
-            )}
-          </button>
 
-          {/* Recording Controls — manual fallback only shown when recognized but no countdown active */}
-          {isActive && !isRecording && recognizedUser && preRecordCountdown === null && !healthMetrics.isAnalyzing && (
+          {/* Camera toggle — only shown in idle/done state or when camera is off */}
+          {(mirrorPhase === "idle" || mirrorPhase === "done" || !isActive) && !isRecording && !healthMetrics.isAnalyzing && (
             <button
-              onClick={beginPreRecordCountdown}
-              className="flex items-center justify-center gap-2 px-5 py-3 rounded-full font-medium transition-all duration-300 hover:scale-105 active:scale-95"
+              onClick={toggleCamera}
+              disabled={isRecording || healthMetrics.isAnalyzing}
+              className="flex items-center justify-center gap-2 px-5 py-3 rounded-full font-medium transition-all duration-300 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
-                background: "rgba(99, 102, 241, 0.2)",
-                border: "1px solid rgba(99, 102, 241, 0.4)",
+                background: isActive
+                  ? "rgba(239, 68, 68, 0.15)"
+                  : "rgba(34, 197, 94, 0.2)",
+                border: isActive
+                  ? "1px solid rgba(239, 68, 68, 0.35)"
+                  : "1px solid rgba(34, 197, 94, 0.4)",
                 backdropFilter: "blur(24px)",
                 WebkitBackdropFilter: "blur(24px)",
-                color: "#a5b4fc",
-                boxShadow: "0 0 16px 0px rgba(99, 102, 241, 0.2), 0 0 0 0.5px rgba(99, 102, 241, 0.3) inset",
+                color: isActive ? "#fca5a5" : "#86efac",
+                boxShadow: isActive
+                  ? "0 0 16px 0px rgba(239, 68, 68, 0.15), 0 0 0 0.5px rgba(239, 68, 68, 0.25) inset"
+                  : "0 0 16px 0px rgba(34, 197, 94, 0.2), 0 0 0 0.5px rgba(34, 197, 94, 0.3) inset",
               }}
             >
-              <Play size={16} fill="currentColor" />
-              <span>Record</span>
+              {isActive ? (
+                <>
+                  <Square size={16} fill="currentColor" />
+                  <span>Stop Mirror</span>
+                </>
+              ) : (
+                <>
+                  <Play size={16} fill="currentColor" />
+                  <span>Start Mirror</span>
+                </>
+              )}
             </button>
           )}
 
+          {/* ── Start Session button — shown when camera is on and idle ── */}
+          {isActive && (mirrorPhase === "idle" || mirrorPhase === "done") && !isRecording && !healthMetrics.isAnalyzing && (
+            <button
+              id="start-session-btn"
+              onClick={() => beginScanPhase()}
+              className="flex items-center justify-center gap-2 px-7 py-3.5 rounded-full font-semibold transition-all duration-300 hover:scale-105 active:scale-95"
+              style={{
+                background: "linear-gradient(135deg, rgba(99,102,241,0.35) 0%, rgba(139,92,246,0.35) 100%)",
+                border: "1px solid rgba(167,139,250,0.5)",
+                backdropFilter: "blur(24px)",
+                WebkitBackdropFilter: "blur(24px)",
+                color: "#c4b5fd",
+                boxShadow: "0 0 28px 0px rgba(139,92,246,0.3), 0 0 0 0.5px rgba(167,139,250,0.35) inset",
+                fontSize: "0.9rem",
+                letterSpacing: "0.02em",
+              }}
+            >
+              <ScanFace size={18} />
+              <span>Start Session</span>
+            </button>
+          )}
 
         </div>
       </div>

@@ -69,7 +69,7 @@ export class HealthAnalysisAPI {
     }
   }
 
-  static async authenticateUser(imageBlob: Blob): Promise<{ success: boolean; elderly_id?: string; first_name?: string; message?: string; error?: string }> {
+  static async authenticateUser(imageBlob: Blob): Promise<{ success: boolean; elderly_id?: string; first_name?: string; last_name?: string; message?: string; error?: string }> {
     try {
       const formData = new FormData()
       formData.append("file", imageBlob, "face.jpg")
