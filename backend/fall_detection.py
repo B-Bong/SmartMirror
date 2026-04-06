@@ -86,7 +86,7 @@ class FallDetector:
             return self._empty_result()
 
         # Run YOLO pose inference
-        results = self.model(frame, imgsz=self.inference_size, verbose=False, max_det=20)
+        results = self.model(frame, imgsz=self.inference_size, verbose=False, max_det=1)
 
         if not results or len(results) == 0:
             return self._empty_result()

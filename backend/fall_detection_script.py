@@ -59,7 +59,7 @@ while cap.isOpened():
         break
 
     # Run inference with reduced resolution for better FPS
-    results = model(frame, imgsz=INFERENCE_SIZE, verbose=False, max_det=20)
+    results = model(frame, imgsz=INFERENCE_SIZE, verbose=False, max_det=1)
     
     # Calculate FPS
     current_time = time.time()
