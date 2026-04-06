@@ -43,17 +43,18 @@ export function useDailyDrops(elderlyId: string | null, pollIntervalMs = 15000) 
     }
   }, [elderlyId])
 
-  const markAsViewed = async (dropId: string) => {
+  const markAsViewed = useCallback(async (dropId: string) => {
+    // Clear immediately so the overlay closes regardless of network outcome
+    setCurrentDrop(null)
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
       await fetch(`${apiUrl}/api/drops/${dropId}/mark-viewed`, {
         method: "POST"
       })
-      setCurrentDrop(null) // Clear from local state
     } catch (err) {
       console.error("[useDailyDrops] Error marking drop as viewed:", err)
     }
-  }
+  }, [])
 
   useEffect(() => {
     if (!elderlyId) {
