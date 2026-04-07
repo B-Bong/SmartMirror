@@ -62,11 +62,11 @@ def _age_from_dob(dob: str | date | None) -> int | None:
 
 
 def _fetch_elderly_profile(sb: SupabaseClient, elderly_id: str) -> dict:
-    """Fetch age and gender from the elderlies table."""
+    """Fetch age, gender, and medical notes from the elderlies table."""
     try:
         result = (
             sb.table("elderlies")
-            .select("first_name, date_of_birth, gender")
+            .select("first_name, date_of_birth, gender, medical_notes")
             .eq("id", elderly_id)
             .limit(1)
             .execute()
@@ -77,10 +77,11 @@ def _fetch_elderly_profile(sb: SupabaseClient, elderly_id: str) -> dict:
                 "name": row.get("first_name", "the elderly"),
                 "age": _age_from_dob(row.get("date_of_birth")),
                 "gender": row.get("gender", "unknown"),
+                "medical_notes": row.get("medical_notes", ""),
             }
     except Exception as exc:
         logger.error(f"Failed to fetch elderly profile: {exc}")
-    return {"name": "the elderly", "age": None, "gender": "unknown"}
+    return {"name": "the elderly", "age": None, "gender": "unknown", "medical_notes": ""}
 
 
 # ── Prompt construction ───────────────────────────────────────────────────────
@@ -88,19 +89,20 @@ def _fetch_elderly_profile(sb: SupabaseClient, elderly_id: str) -> dict:
 _SYSTEM_PROMPT = """\
 You are a professional health-monitoring AI assistant for elderly care.
 You receive vital-sign measurements from a smart mirror and produce a
-brief, actionable health report for the caregiver.
+brief, actionable, and highly personalized health report for the caregiver.
 
 RULES:
 1. Write in clear, empathetic language a caregiver can understand.
-2. Do NOT diagnose — you are not a doctor.  Flag concerns and suggest
-   consulting a healthcare professional when appropriate.
+2. Do NOT diagnose — you are not a doctor.  Flag concerns and suggest consulting a healthcare professional when appropriate.
 3. Keep both sections concise (3-5 bullet points each).
-4. Assign a risk_level: "low", "moderate", or "high" based on the vitals.
+4. Assign a risk_level: "low", "moderate", or "high" based on the vitals and the elderly's medical context.
+5. Provide deep, context-aware insights based on the elderly's specific medical background (if provided), rather than just comparing vitals to typical healthy baselines. 
+6. Offer practical and specific caregiver suggestions tailored to the current vitals and their particular medical conditions.
 
 Return your answer ONLY as valid JSON with exactly these keys:
 {
-  "insights": "<health analysis as a single string with bullet points separated by newlines>",
-  "suggestions": "<caregiver suggestions as a single string with bullet points separated by newlines>",
+  "insights": "<highly personalized health analysis as a single string with bullet points separated by newlines>",
+  "suggestions": "<specific caregiver suggestions as a single string with bullet points separated by newlines>",
   "risk_level": "low | moderate | high"
 }
 """
@@ -110,12 +112,18 @@ def _build_user_prompt(profile: dict, vitals: dict) -> str:
     """Build the user-turn prompt with elderly context and latest vitals."""
     age_str = f"{profile['age']} years old" if profile['age'] else "age unknown"
     gender_str = profile.get("gender", "unknown")
+    medical_notes = profile.get("medical_notes", "")
 
     lines = [
         f"Elderly profile: {profile['name']}, {age_str}, {gender_str}.",
+    ]
+    if medical_notes:
+        lines.append(f"Medical notes / Pre-existing conditions: {medical_notes}")
+        
+    lines.extend([
         "",
         "Latest vital-sign measurement:",
-    ]
+    ])
 
     # Required raw biometric metrics — Gemini derives its own assessment
     required_labels = {

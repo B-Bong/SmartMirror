@@ -658,6 +658,9 @@ export default function SmartMirror() {
           <DailyDropViewer
             drop={currentDrop}
             onDismiss={markAsViewed}
+            isRecording={isRecording}
+            recordingDuration={duration}
+            maxRecordingDuration={RECORDING_DURATION}
           />
         )}
 

@@ -1,33 +1,60 @@
 {
+<<<<<<< Updated upstream
     "updated_at": "2026-04-06T22:36:38.678352",
+=======
+    "updated_at": "2026-04-06T22:56:51.909059",
+>>>>>>> Stashed changes
     "metrics": {
         "heart_rate": {
             "label": "Heart Rate",
             "unit": "bpm",
+<<<<<<< Updated upstream
             "latest": 77.17317199707031,
             "average": 63.7761,
             "count": 14
+=======
+            "latest": 63.7513427734375,
+            "average": 58.9416,
+            "count": 13
+>>>>>>> Stashed changes
         },
         "respiratory_rate": {
             "label": "Respiratory Rate",
             "unit": "rpm",
+<<<<<<< Updated upstream
             "latest": 8.932902336120605,
             "average": 14.1106,
+=======
+            "latest": 20.79973602294922,
+            "average": 16.0023,
+>>>>>>> Stashed changes
             "count": 12
         },
         "hrv_sdnn": {
             "label": "HRV (SDNN)",
             "unit": "ms",
+<<<<<<< Updated upstream
             "latest": 112.6270523071289,
             "average": 121.6644,
             "count": 11
+=======
+            "latest": 117.46699523925781,
+            "average": 118.5149,
+            "count": 10
+>>>>>>> Stashed changes
         },
         "hrv_rmssd": {
             "label": "HRV (RMSSD)",
             "unit": "ms",
+<<<<<<< Updated upstream
             "latest": 86.35643768310547,
             "average": 121.7427,
             "count": 12
+=======
+            "latest": 119.6529312133789,
+            "average": 126.175,
+            "count": 11
+>>>>>>> Stashed changes
         },
         "hrv_lfhf": {
             "label": "HRV (LF/HF)",
