@@ -26,6 +26,7 @@ from health_insights import generate_and_store_insights
 import cv2
 import numpy as np
 from deepface import DeepFace
+from pydantic import BaseModel
 
 # Load environment variables
 load_dotenv()
@@ -831,6 +832,148 @@ async def mark_drop_viewed(drop_id: str):
     except Exception as e:
         logger.error(f"Error marking drop viewed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Fall Reporting ─────────────────────────────────────────────────────────────
+
+class FallReportRequest(BaseModel):
+    elderly_id: str
+    is_global: bool = False
+
+@app.post("/api/falls/report")
+async def report_fall(payload: FallReportRequest):
+    """Insert a FALL alert into safety_alerts for the identified elderly user."""
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    try:
+        supabase.table("safety_alerts").insert({
+            "elderly_id": payload.elderly_id,
+            "alert_type": "FALL",
+            "severity": "critical",
+            "message": "Fall detected by Smart Mirror" + (" (person left frame)" if payload.is_global else ""),
+        }).execute()
+        logger.info(f"[fall] Recorded FALL alert for elderly {payload.elderly_id}")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[fall] Error recording fall: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Expression Detection ───────────────────────────────────────────────────────
+
+EMOTION_LABELS = {
+    "happy":     "Happy",
+    "sad":       "Sad",
+    "angry":     "Angry",
+    "surprise":  "Surprised",
+    "fear":      "Fearful",
+    "disgust":   "Disgusted",
+    "neutral":   "Neutral",
+}
+
+class ReactionRequest(BaseModel):
+    reaction_type: str
+
+@app.post("/api/drops/{drop_id}/reaction")
+async def register_drop_reaction(drop_id: str, payload: ReactionRequest):
+    """Record an expression reaction for a daily drop in mirror_reactions."""
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    try:
+        # 1. Fetch drop to get elderly_id
+        drop_resp = supabase.table("daily_drops").select("elderly_id").eq("id", drop_id).execute()
+        if not drop_resp.data:
+            raise HTTPException(status_code=404, detail="Drop not found")
+        elderly_id = drop_resp.data[0]["elderly_id"]
+
+        # 2. Fetch elderly's first name for the message
+        elderly_name = "The user"
+        elderly_resp = supabase.table("elderlies").select("first_name").eq("id", elderly_id).execute()
+        if elderly_resp.data:
+            name = elderly_resp.data[0].get("first_name")
+            if name:
+                elderly_name = name
+
+        # 3. Build human-readable message
+        emotion_label = EMOTION_LABELS.get(payload.reaction_type, payload.reaction_type)
+        if payload.reaction_type in ["happy", "smile"]:
+            message = f"{elderly_name} smiled at your daily drop! 😊"
+        elif payload.reaction_type == "neutral":
+            message = f"{elderly_name} watched your daily drop."
+        else:
+            message = f"{elderly_name} looked {emotion_label.lower()} while viewing your daily drop."
+
+        # 4. Insert into mirror_reactions
+        supabase.table("mirror_reactions").insert({
+            "elderly_id": elderly_id,
+            "reaction_type": payload.reaction_type,
+            "related_drop_id": drop_id,
+            "message": message
+        }).execute()
+
+        logger.info(f"[reaction] Recorded '{payload.reaction_type}' for drop {drop_id} — {message}")
+        return {"success": True, "message": message}
+
+    except Exception as e:
+        logger.error(f"[reaction] Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _run_deepface_expression(img_array: np.ndarray) -> dict:
+    """
+    Synchronous DeepFace call — run in a thread-pool so the async loop is not blocked.
+    Returns the dominant emotion and per-emotion confidence scores.
+    """
+    try:
+        results = DeepFace.analyze(
+            img_path=img_array,
+            actions=["emotion"],
+            enforce_detection=False,
+            detector_backend="opencv",  # fast; no face → still returns neutral
+            silent=True,
+        )
+        # DeepFace returns a list when multiple faces are found
+        result = results[0] if isinstance(results, list) else results
+        dominant = result.get("dominant_emotion", "neutral").lower()
+        emotions  = result.get("emotion", {})
+        score     = emotions.get(dominant, 0.0)
+        return {
+            "emotion":      dominant,
+            "label":        EMOTION_LABELS.get(dominant, dominant.capitalize()),
+            "score":        round(float(score), 2),
+            "all_emotions": {k: round(float(v), 2) for k, v in emotions.items()},
+        }
+    except Exception as exc:
+        logger.warning(f"[expression] DeepFace error: {exc}")
+        return {"emotion": "none", "label": "None", "score": 0.0, "all_emotions": {}}
+
+
+@app.post("/api/expression/detect")
+async def detect_expression(file: UploadFile = File(...)):
+    """
+    Receive a single JPEG frame from the Smart Mirror camera and return
+    the user's dominant facial expression detected by DeepFace.
+
+    Used exclusively during Daily Drop playback to capture the mirror
+    user's reaction in real time.
+    """
+    try:
+        contents = await file.read()
+        if not contents:
+            return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return JSONResponse(status_code=400, content={"error": "Could not decode image"})
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _run_deepface_expression, img)
+        return result
+
+    except Exception as exc:
+        logger.error(f"[expression] Unexpected error: {exc}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
 @app.on_event("startup")

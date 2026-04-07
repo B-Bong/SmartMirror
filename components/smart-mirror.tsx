@@ -298,14 +298,31 @@ export default function SmartMirror() {
   }, [mirrorPhase, beginPreRecordCountdown])
 
   // Trigger fall alert whenever a fall is first detected
+  const fallReportedRef = useRef(false)
   useEffect(() => {
     if (fallDetected || globalFallDetected) {
       setFallAlertActive(true)
       setFallAlertDetectedAt(new Date())
       // Prefer per-person fall label; only flag as global if no in-frame fall
       setFallAlertIsGlobal(!fallDetected && globalFallDetected)
+
+      // Report to Supabase only if a user has been identified and not already sent
+      if (recognizedUser && !fallReportedRef.current) {
+        fallReportedRef.current = true
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/falls/report`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            elderly_id: recognizedUser,
+            is_global: !fallDetected && globalFallDetected,
+          }),
+        }).catch(() => {/* best-effort */})
+      }
+    } else {
+      // Reset guard once fall clears so next fall can be reported
+      fallReportedRef.current = false
     }
-  }, [fallDetected, globalFallDetected])
+  }, [fallDetected, globalFallDetected, recognizedUser])
 
   // Pre-recording countdown tick
   useEffect(() => {
@@ -661,6 +678,7 @@ export default function SmartMirror() {
             isRecording={isRecording}
             recordingDuration={duration}
             maxRecordingDuration={RECORDING_DURATION}
+            cameraRef={videoRef}
           />
         )}
 
